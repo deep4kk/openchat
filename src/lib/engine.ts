@@ -65,18 +65,44 @@ export type WebhookBody = {
   entry?: { id: string; time: number; changes?: { field: string; value: unknown }[]; messaging?: MessagingEvent[] }[];
 };
 
-export async function handleWebhook(body: WebhookBody) {
-  if (body.object !== "instagram") return;
-  for (const entry of body.entry ?? []) {
-    const account = await db.account.findUnique({ where: { igUserId: String(entry.id) } });
-    if (!account || !isAllowedUsername(account.username)) continue;
+/**
+ * One line per step in the server log, so a comment or tap that goes nowhere can be traced.
+ * Shapes and outcomes only: never usernames, IDs or message text.
+ */
+const trace = (message: string) => console.log(`[autodm] ${message}`);
 
-    for (const change of entry.changes ?? []) {
-      if (change.field !== "comments") continue;
-      await safely(() => handleComment(account, change.value as CommentValue), "comment");
+const isMessagingEvent = (v: unknown): v is MessagingEvent =>
+  typeof v === "object" && v !== null && "sender" in v && ("message" in v || "postback" in v);
+
+export async function handleWebhook(body: WebhookBody) {
+  if (body.object !== "instagram") return trace(`webhook ignored: object is ${String(body.object)}`);
+  for (const entry of body.entry ?? []) {
+    const shape = Object.keys(entry)
+      .filter((k) => k !== "id" && k !== "time")
+      .map((k) => (k === "changes" ? `changes(${(entry.changes ?? []).map((c) => c.field).join(",")})` : k))
+      .join("+");
+    const account = await db.account.findUnique({ where: { igUserId: String(entry.id) } });
+    if (!account) {
+      trace(`webhook [${shape}] ignored: no connected account has this entry ID`);
+      continue;
     }
-    if (account.status !== "ACTIVE") continue;
-    for (const event of entry.messaging ?? []) {
+    if (!isAllowedUsername(account.username)) {
+      trace(`webhook [${shape}] ignored: account is not in ALLOWED_IG_USERNAMES`);
+      continue;
+    }
+
+    // Messages normally arrive under "messaging"; some app setups deliver them as a change instead.
+    const events = [...(entry.messaging ?? [])];
+    for (const change of entry.changes ?? []) {
+      if (change.field === "comments") await safely(() => handleComment(account, change.value as CommentValue), "comment");
+      else if (isMessagingEvent(change.value)) events.push(change.value);
+      else trace(`webhook change "${change.field}" ignored`);
+    }
+    if (events.length && account.status !== "ACTIVE") {
+      trace(`${events.length} message event(s) ignored: account status is ${account.status}`);
+      continue;
+    }
+    for (const event of events) {
       await safely(() => handleMessaging(account, event), "messaging");
     }
   }
@@ -91,6 +117,8 @@ async function safely(fn: () => Promise<void>, label: string) {
 }
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err)).slice(0, 500);
+/** Error text for the server log, with Instagram IDs masked. */
+const forLog = (text: string) => text.replace(/\d{9,}/g, "<id>");
 const isUniqueViolation = (err: unknown) => err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const jitter = (min: number, max: number) => min + Math.floor(Math.random() * (max - min));
@@ -428,15 +456,23 @@ function withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
 }
 
 async function handleMessaging(account: Account, event: MessagingEvent) {
-  if (event.message?.is_echo) return;
+  // What kind of event this is, for the log: e.g. "message+quick_reply", "postback", "read".
+  const kind =
+    [event.message && "message", event.message?.quick_reply && "quick_reply", event.postback && "postback"].filter(Boolean).join("+") ||
+    Object.keys(event).filter((k) => !["sender", "recipient", "timestamp"].includes(k)).join("+") ||
+    "empty";
+  if (event.message?.is_echo) return; // our own outgoing messages, reported back to us
   const igsid = event.sender?.id;
-  if (!igsid || igsid === account.igUserId) return;
+  if (!igsid) return trace(`${kind} ignored: no sender`);
+  if (igsid === account.igUserId) return trace(`${kind} ignored: sent by the account itself`);
 
   const mid = event.message?.mid ?? event.postback?.mid;
-  if (!mid) return; // reads, reactions, etc.
-  if (!(await markProcessed(mid))) return;
+  if (!mid) return trace(`${kind} ignored: not a message or button tap`); // reads, reactions, etc.
+  if (!(await markProcessed(mid))) return trace(`${kind} ignored: already handled (Meta retry)`);
 
-  const tapped = payload.parse(event.message?.quick_reply?.payload ?? event.postback?.payload);
+  const raw = event.message?.quick_reply?.payload ?? event.postback?.payload;
+  const tapped = payload.parse(raw);
+  trace(`${kind} received: ${tapped ? `button ${tapped.kind}` : raw ? "button with an unknown payload" : "no button payload"}`);
   await withLock(`${account.id}:${igsid}`, () => continueRun(account, igsid, tapped?.runId));
 }
 
@@ -453,14 +489,10 @@ async function continueRun(account: Account, igsid: string, runId?: string) {
         where: { accountId: account.id, OR: [{ igsid }, { dmUserId: igsid }], state: { in: ["PRIVATE_REPLIED", "AWAITING_FOLLOW"] } },
         orderBy: { createdAt: "desc" },
       });
-  if (!run) {
-    // Worth a line in the log: without it a dropped tap leaves no trace at all.
-    if (runId) console.warn("[autodm] tap ignored: its run no longer exists");
-    return;
-  }
-  if (!["PRIVATE_REPLIED", "AWAITING_FOLLOW", "DELIVERED"].includes(run.state)) return;
-  if (run.lastUserMessageAt && Date.now() - run.lastUserMessageAt.getTime() < DEBOUNCE_MS) return;
-  if (run.igsid !== igsid && run.dmUserId !== igsid) console.log("[autodm] tap matched by run ID; the sender's DM ID differs from the comment's");
+  if (!run) return trace(runId ? "tap ignored: its run no longer exists" : "message ignored: this person has no run waiting for a tap");
+  if (!["PRIVATE_REPLIED", "AWAITING_FOLLOW", "DELIVERED"].includes(run.state)) return trace(`tap ignored: run is ${run.state}`);
+  if (run.lastUserMessageAt && Date.now() - run.lastUserMessageAt.getTime() < DEBOUNCE_MS) return trace("tap ignored: double tap");
+  if (run.igsid !== igsid && run.dmUserId !== igsid) trace("tap matched by run ID; the sender's DM ID differs from the comment's");
 
   // Compare-and-set claim: on serverless hosts two taps can land on different
   // instances, where the in-process lock doesn't reach. Only one claim wins.
@@ -469,10 +501,11 @@ async function continueRun(account: Account, igsid: string, runId?: string) {
     // The sender's ID is kept so a typed reply (no button, no run ID) finds this run too.
     data: { lastUserMessageAt: new Date(), ...(run.igsid !== igsid ? { dmUserId: igsid } : {}) },
   });
-  if (claimed.count === 0) return;
+  if (claimed.count === 0) return trace("tap ignored: another request is already handling it");
 
   const row = await db.automation.findUnique({ where: { id: run.automationId } });
-  if (!row) return;
+  if (!row) return trace("tap ignored: its automation was deleted");
+  trace(`tap accepted: run is ${run.state}, follow gate ${row.askToFollow ? "on" : "off"}`);
   const automation = parseAutomation(row);
   const to: Recipient = { id: igsid };
 
@@ -492,6 +525,7 @@ async function continueRun(account: Account, igsid: string, runId?: string) {
       if (err instanceof GraphError && (err.isAuth || err.isRateLimit)) throw err;
       checkError = `Follow check failed: ${errorText(err)}`;
     }
+    trace(checkError ? `follow check failed (treated as not following): ${forLog(checkError)}` : `follow check: ${follows ? "follows" : "does not follow"}`);
     if (follows) {
       // They were asked to follow at least once and now do: a follower won by this automation.
       if (run.followAttempts > 0 && !run.followGainedAt) {
@@ -503,7 +537,7 @@ async function continueRun(account: Account, igsid: string, runId?: string) {
     if (run.followAttempts >= automation.followMaxAttempts) {
       if (automation.followOnFail === "SEND_ANYWAY") return await deliverLink(token, to, run, automation);
       await db.run.update({ where: { id: run.id }, data: { state: "ABANDONED", error: checkError } });
-      return;
+      return trace("follow attempts used up: nothing more is sent");
     }
 
     await sendCard(token, to, automation.followMessage, `Follow @${account.username} to continue`, [
@@ -514,7 +548,10 @@ async function continueRun(account: Account, igsid: string, runId?: string) {
       where: { id: run.id },
       data: { state: "AWAITING_FOLLOW", followAttempts: { increment: 1 }, error: checkError },
     });
+    trace("follow request sent");
   } catch (err) {
+    // Also in the log, not only on the run: a reply that fails after a tap must be findable.
+    console.error(`[autodm] reply after tap failed: ${forLog(errorText(err))}`);
     if (err instanceof GraphError && err.isAuth) await markReconnect(account.id);
     const hint = err instanceof GraphError && err.isRateLimit ? "Instagram rate limit; the user can tap again later" : errorText(err);
     await db.run.update({ where: { id: run.id }, data: { error: hint } });
@@ -532,6 +569,7 @@ async function deliverLink(token: string, to: Recipient, run: Run, automation: P
     await sendMessage(token, to, { text: automation.linkMessage });
   }
   await db.run.update({ where: { id: run.id }, data: { state: "DELIVERED", error: null } });
+  trace("final DM sent");
 }
 
 /**
