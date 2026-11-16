@@ -173,6 +173,24 @@ export async function listMedia(token: string, after?: string) {
 
 // ---------- Comments & messages ----------
 
+export type IgComment = {
+  id: string;
+  text?: string;
+  timestamp: string;
+  username?: string;
+  /** id is the commenter's Instagram-scoped ID, the same one webhooks send. */
+  from?: { id: string; username?: string };
+};
+
+/** Top-level comments on one post or reel, 50 per page. */
+export async function listComments(token: string, mediaId: string, after?: string) {
+  const params = new URLSearchParams({ fields: "id,text,timestamp,username,from", limit: "50", access_token: token });
+  if (after) params.set("after", after);
+  return call<{ data: IgComment[]; paging?: { cursors?: { after?: string }; next?: string } }>(
+    graph(`/${mediaId}/comments?${params}`),
+  );
+}
+
 export function replyToComment(token: string, commentId: string, message: string) {
   return call<{ id: string }>(graph(`/${commentId}/replies`), {
     method: "POST",

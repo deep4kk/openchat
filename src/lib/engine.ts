@@ -19,12 +19,14 @@
 import type { Account, Automation, Run } from "@prisma/client";
 import { Prisma } from "@prisma/client";
 import { db } from "./db";
-import { isAllowedUsername, limits } from "./env";
+import { env, isAllowedUsername, limits } from "./env";
 import { parseAutomation, type ParsedAutomation } from "./automation-schema";
 import { payload, pickRandom, selectAutomation } from "./matching";
 import {
   GraphError,
   getFollowStatus,
+  listComments,
+  listMedia,
   replyToComment,
   sendMessage,
   tokenFor,
@@ -101,42 +103,179 @@ async function markReconnect(accountId: string) {
 
 /** Matches the comment to an automation and queues it. Sending happens in processQueue. */
 async function handleComment(account: Account, value: CommentValue) {
+  await queueComment(account, value);
+}
+
+/** The automation's chosen delay plus a little randomness, so replies don't land on the exact same second. */
+function replyDelayMs(automation: { replyDelaySeconds: number }) {
+  const base = Math.max(0, automation.replyDelaySeconds) * 1000;
+  const total = base + jitter(1000, 1000 + Math.max(2000, base * 0.2));
+  // Stay inside the 280 s the Vercel webhook keeps sending for (see drainQueueFor).
+  return Math.min(total, Math.max(base, 250_000));
+}
+
+/** States that don't count as "this person already went through the automation". */
+const RETRYABLE_STATES = ["FAILED", "EXPIRED"];
+
+type NewRun = { commentId: string; text: string; mediaId: string; igsid: string; username?: string };
+
+/** The queued Run row for one comment. `commentedAt` backdates it so the 7-day reply window counts from the comment. */
+function queuedRun(accountId: string, automationId: string, c: NewRun, delayMs: number, commentedAt?: Date) {
+  return {
+    accountId,
+    automationId,
+    commentId: c.commentId,
+    commentText: c.text.slice(0, 1000),
+    mediaId: c.mediaId,
+    igsid: c.igsid,
+    username: c.username,
+    state: "QUEUED",
+    nextAttemptAt: new Date(Date.now() + delayMs),
+    ...(commentedAt ? { createdAt: commentedAt } : {}),
+  };
+}
+
+/** Returns true if a new run was queued. */
+async function queueComment(account: Account, value: CommentValue): Promise<boolean> {
   const igsid = value?.from?.id;
   const mediaId = value?.media?.id;
   const text = value?.text ?? "";
   // Ignore our own comments/replies (including the public replies we post).
-  if (!value?.id || !igsid || !mediaId || igsid === account.igUserId) return;
+  if (!value?.id || !igsid || !mediaId || igsid === account.igUserId) return false;
 
-  const rows = await db.automation.findMany({ where: { accountId: account.id, active: true } });
-  const automation = selectAutomation(rows.map(parseAutomation), mediaId, text);
-  if (!automation) return;
+  const rows = (await db.automation.findMany({ where: { accountId: account.id, active: true } })).map(parseAutomation);
+  const automation = selectAutomation(rows, mediaId, text);
+  if (!automation) return false;
 
   if (automation.oncePerUser) {
     const previous = await db.run.findFirst({
-      where: { automationId: automation.id, igsid, state: { notIn: ["FAILED", "EXPIRED"] } },
+      where: { automationId: automation.id, igsid, state: { notIn: RETRYABLE_STATES } },
+      select: { id: true },
     });
-    if (previous) return;
+    if (previous) return false;
   }
 
   try {
     await db.run.create({
-      data: {
-        accountId: account.id,
-        automationId: automation.id,
-        commentId: value.id,
-        commentText: text.slice(0, 1000),
-        mediaId,
-        igsid,
-        username: value.from?.username,
-        state: "QUEUED",
-        // A short human-like delay instead of replying in the same second.
-        nextAttemptAt: new Date(Date.now() + jitter(3000, 9000)),
-      },
+      // A short human-like delay instead of replying in the same second.
+      data: queuedRun(account.id, automation.id, { commentId: value.id, text, mediaId, igsid, username: value.from?.username }, replyDelayMs(automation)),
     });
+    return true;
   } catch (err) {
     // The unique commentId makes Meta's webhook retries no-ops.
     if (!isUniqueViolation(err)) throw err;
+    return false;
   }
+}
+
+// ---------------------------------------------------------------- existing comments
+
+const CATCH_UP_MEDIA_LIMIT = 10; // "all posts" automations: the latest 10 posts/reels
+const CATCH_UP_PAGES_PER_MEDIA = 4; // up to 200 comments per post
+
+/**
+ * Queues the comments that were already on the automation's posts before it existed.
+ * Only comments still inside Instagram's 7-day private-reply window can get the DM;
+ * older matching ones are counted in tooOld. Replies are spaced out, not sent in a burst.
+ */
+export async function queueExistingComments(account: Account, automationId: string) {
+  // found/own/noCommenter/notMatching explain on the dashboard why comments weren't queued.
+  const result = { queued: 0, tooOld: 0, skipped: 0, found: 0, own: 0, noCommenter: 0, notMatching: 0, posts: 0 };
+  const automations = (await db.automation.findMany({ where: { accountId: account.id, active: true } })).map(parseAutomation);
+  const automation = automations.find((a) => a.id === automationId);
+  if (!automation) return result;
+
+  const token = await tokenFor(account);
+  const mediaIds =
+    automation.mediaScope === "SPECIFIC_MEDIA"
+      ? automation.mediaIds
+      : (await listMedia(token)).data.slice(0, CATCH_UP_MEDIA_LIMIT).map((m) => m.id);
+  // Leave at least an hour of the window to actually send.
+  const cutoff = Date.now() - PRIVATE_REPLY_WINDOW + HOUR;
+  let delay = replyDelayMs(automation);
+
+  result.posts = mediaIds.length;
+  // People queued earlier in this same pass, for "once per person".
+  const queuedPeople = new Set<string>();
+  for (const mediaId of mediaIds) {
+    let after: string | undefined;
+    for (let page = 0; page < CATCH_UP_PAGES_PER_MEDIA; page++) {
+      const res = await listComments(token, mediaId, after);
+      const eligible: { run: NewRun; commentedAt: Date }[] = [];
+      for (const c of res.data) {
+        result.found++;
+        if (c.from?.id === account.igUserId || (c.username ?? c.from?.username)?.toLowerCase() === account.username.toLowerCase()) {
+          result.own++;
+          continue;
+        }
+        if (!c.from?.id) {
+          result.noCommenter++;
+          continue;
+        }
+        if (selectAutomation(automations, mediaId, c.text ?? "")?.id !== automationId) {
+          result.notMatching++;
+          continue;
+        }
+        const commentedAt = new Date(c.timestamp);
+        if (!(commentedAt.getTime() >= cutoff)) {
+          result.tooOld++;
+          continue;
+        }
+        eligible.push({
+          run: { commentId: c.id, text: c.text ?? "", mediaId, igsid: c.from.id, username: c.from.username ?? c.username },
+          commentedAt,
+        });
+      }
+
+      // One round of lookups and one insert per page of comments, however many there are.
+      if (eligible.length) {
+        const [handled, previous] = await Promise.all([
+          db.run.findMany({ where: { commentId: { in: eligible.map((e) => e.run.commentId) } }, select: { commentId: true } }),
+          automation.oncePerUser
+            ? db.run.findMany({
+                where: { automationId, igsid: { in: eligible.map((e) => e.run.igsid) }, state: { notIn: RETRYABLE_STATES } },
+                select: { igsid: true },
+              })
+            : [],
+        ]);
+        const handledComments = new Set(handled.map((r) => r.commentId));
+        for (const r of previous) queuedPeople.add(r.igsid);
+
+        const rows = [];
+        for (const { run, commentedAt } of eligible) {
+          // Already handled, or this person already went through the automation.
+          if (handledComments.has(run.commentId) || (automation.oncePerUser && queuedPeople.has(run.igsid))) continue;
+          handledComments.add(run.commentId);
+          queuedPeople.add(run.igsid);
+          rows.push(queuedRun(account.id, automationId, run, delay, commentedAt));
+          delay += jitter(4000, 8000);
+        }
+
+        let created = rows.length;
+        try {
+          if (rows.length) await db.run.createMany({ data: rows });
+        } catch (err) {
+          // A webhook queued one of these comments in the meantime: insert the rest one at a time.
+          if (!isUniqueViolation(err)) throw err;
+          created = 0;
+          for (const row of rows) {
+            try {
+              await db.run.create({ data: row });
+              created++;
+            } catch (e) {
+              if (!isUniqueViolation(e)) throw e;
+            }
+          }
+        }
+        result.queued += created;
+        result.skipped += eligible.length - created;
+      }
+      after = res.paging?.cursors?.after;
+      if (!res.paging?.next || !after) break;
+    }
+  }
+  console.log("[autodm] existing comments", JSON.stringify(result));
+  return result;
 }
 
 // ---------------------------------------------------------------- queue
@@ -337,7 +476,13 @@ async function continueRun(account: Account, igsid: string, runId?: string) {
       if (err instanceof GraphError && (err.isAuth || err.isRateLimit)) throw err;
       checkError = `Follow check failed: ${errorText(err)}`;
     }
-    if (follows) return await deliverLink(token, to, run, automation);
+    if (follows) {
+      // They were asked to follow at least once and now do: a follower won by this automation.
+      if (run.followAttempts > 0 && !run.followGainedAt) {
+        await db.run.update({ where: { id: run.id }, data: { followGainedAt: new Date() } });
+      }
+      return await deliverLink(token, to, run, automation);
+    }
 
     if (run.followAttempts >= automation.followMaxAttempts) {
       if (automation.followOnFail === "SEND_ANYWAY") return await deliverLink(token, to, run, automation);
@@ -361,9 +506,15 @@ async function continueRun(account: Account, igsid: string, runId?: string) {
 }
 
 async function deliverLink(token: string, to: Recipient, run: Run, automation: ParsedAutomation) {
-  await sendCard(token, to, automation.linkMessage, "👇 Tap below", [
-    { type: "web_url", title: automation.linkButtonLabel, url: automation.linkUrl },
-  ]);
+  if (automation.linkUrl) {
+    await sendCard(token, to, automation.linkMessage, "👇 Tap below", [
+      // Goes through /r/<run id>, which counts the tap and redirects to the real link.
+      { type: "web_url", title: automation.linkButtonLabel || "Open link", url: `${env.appUrl}/r/${run.id}` },
+    ]);
+  } else {
+    // No link: the final DM is just the message.
+    await sendMessage(token, to, { text: automation.linkMessage });
+  }
   await db.run.update({ where: { id: run.id }, data: { state: "DELIVERED", error: null } });
 }
 

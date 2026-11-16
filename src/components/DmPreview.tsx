@@ -26,10 +26,14 @@ export function DmPreview({ v, username }: { v: AutomationInput; username: strin
         )}
 
         <div className="divider">{v.askToFollow ? "Once following" : "After tap"}</div>
-        <div className="bubble-card">
-          <div className="title">{v.linkMessage}</div>
-          <div className="cbtn">{v.linkButtonLabel}</div>
-        </div>
+        {v.linkUrl.trim() ? (
+          <div className="bubble-card">
+            <div className="title">{v.linkMessage}</div>
+            <div className="cbtn">{v.linkButtonLabel || "Open link"}</div>
+          </div>
+        ) : (
+          <div className="bubble them">{v.linkMessage}</div>
+        )}
       </div>
     </div>
   );

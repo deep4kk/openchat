@@ -38,6 +38,12 @@ export function RunsTable({ runs, showAutomation }: { runs: (Run & { automation?
                     {s.label}
                     {r.followAttempts > 0 && ` · ${r.followAttempts}×`}
                   </span>
+                  {r.followGainedAt && <span className="pill ok" style={{ marginLeft: 6 }}>New follower</span>}
+                  {r.linkClicks > 0 && (
+                    <span className="pill" style={{ marginLeft: 6 }}>
+                      Clicked{r.linkClicks > 1 ? ` ${r.linkClicks}×` : ""}
+                    </span>
+                  )}
                   {r.error && <div className="error">{r.error}</div>}
                 </td>
                 <td className="small muted">{r.createdAt.toLocaleString()}</td>

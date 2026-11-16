@@ -1,40 +1,46 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { getAccount } from "@/lib/session";
+import { forbidden, getAccount, isSameOrigin } from "@/lib/session";
 import { automationInput, toRow } from "@/lib/automation-schema";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-async function owned(id: string) {
-  const account = await getAccount();
-  if (!account) return null;
-  return db.automation.findFirst({ where: { id, accountId: account.id } });
-}
+const notFound = () => NextResponse.json({ error: "Not found" }, { status: 404 });
+
+// Each write is one statement scoped to { id, accountId }: ownership is checked by the
+// same query that changes the row, instead of a separate lookup first.
 
 export async function PUT(req: Request, { params }: Ctx) {
-  const existing = await owned((await params).id);
-  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (!isSameOrigin(req)) return forbidden();
+  const account = await getAccount();
+  if (!account) return notFound();
 
   const parsed = automationInput.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
 
-  await db.automation.update({ where: { id: existing.id }, data: toRow(parsed.data) });
-  return NextResponse.json({ id: existing.id });
+  const { id } = await params;
+  const { count } = await db.automation.updateMany({ where: { id, accountId: account.id }, data: toRow(parsed.data) });
+  return count ? NextResponse.json({ id }) : notFound();
 }
 
 /** Toggle active on/off without resending the whole form. */
 export async function PATCH(req: Request, { params }: Ctx) {
-  const existing = await owned((await params).id);
-  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  const { active } = (await req.json().catch(() => ({}))) as { active?: unknown };
+  if (!isSameOrigin(req)) return forbidden();
+  const account = await getAccount();
+  if (!account) return notFound();
+  const { active } = ((await req.json().catch(() => null)) ?? {}) as { active?: unknown };
   if (typeof active !== "boolean") return NextResponse.json({ error: "active must be boolean" }, { status: 400 });
-  await db.automation.update({ where: { id: existing.id }, data: { active } });
-  return NextResponse.json({ id: existing.id, active });
+
+  const { id } = await params;
+  const { count } = await db.automation.updateMany({ where: { id, accountId: account.id }, data: { active } });
+  return count ? NextResponse.json({ id, active }) : notFound();
 }
 
-export async function DELETE(_req: Request, { params }: Ctx) {
-  const existing = await owned((await params).id);
-  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  await db.automation.delete({ where: { id: existing.id } });
-  return NextResponse.json({ ok: true });
+export async function DELETE(req: Request, { params }: Ctx) {
+  if (!isSameOrigin(req)) return forbidden();
+  const account = await getAccount();
+  if (!account) return notFound();
+  const { id } = await params;
+  const { count } = await db.automation.deleteMany({ where: { id, accountId: account.id } });
+  return count ? NextResponse.json({ ok: true }) : notFound();
 }

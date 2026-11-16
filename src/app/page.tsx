@@ -1,5 +1,6 @@
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { getAccount } from "@/lib/session";
+import { getAccount, LOGIN_ERROR_COOKIE } from "@/lib/session";
 import { missingWebEnv } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
@@ -9,7 +10,8 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ e
   if (missing.length) return <SetupChecklist missing={missing} />;
 
   if (await getAccount()) redirect("/dashboard");
-  const { error, deleted } = await searchParams;
+  const { error: failed, deleted } = await searchParams;
+  const error = failed ? ((await cookies()).get(LOGIN_ERROR_COOKIE)?.value ?? "Instagram login failed. Try again.") : null;
   const appUrl = process.env.APP_URL ?? "";
   const sqliteOnVercel = Boolean(process.env.VERCEL) && !/^postgres(ql)?:\/\//.test(process.env.DATABASE_URL ?? "");
 

@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { env } from "@/lib/env";
-import { destroySession, getAccount } from "@/lib/session";
+import { destroySession, forbidden, getAccount, isSameOrigin } from "@/lib/session";
 
 /** "Disconnect and delete my data" from the dashboard. */
-export async function POST() {
+export async function POST(req: Request) {
+  if (!isSameOrigin(req)) return forbidden();
   const account = await getAccount();
   if (account) await db.account.delete({ where: { id: account.id } });
   await destroySession();

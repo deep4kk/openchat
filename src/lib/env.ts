@@ -1,3 +1,8 @@
+// Vercel's Supabase integration names the pooled Prisma URL POSTGRES_PRISMA_URL instead of DATABASE_URL.
+if (!process.env.DATABASE_URL && process.env.POSTGRES_PRISMA_URL) {
+  process.env.DATABASE_URL = process.env.POSTGRES_PRISMA_URL;
+}
+
 const REQUIRED = [
   "APP_URL",
   "DATABASE_URL",

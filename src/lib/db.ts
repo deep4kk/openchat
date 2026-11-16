@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import "./env"; // sets DATABASE_URL from the Supabase integration's variables when needed
 
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 

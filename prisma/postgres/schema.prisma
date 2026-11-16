@@ -74,6 +74,9 @@ model Automation {
   /// Only run once per Instagram user per automation
   oncePerUser     Boolean  @default(true)
 
+  /// Wait this long after a comment before the public reply and opening DM (a little randomness is added)
+  replyDelaySeconds Int    @default(5)
+
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   runs            Run[]
@@ -103,6 +106,11 @@ model Run {
   publicRepliedAt  DateTime?
   privateRepliedAt DateTime?
   lastUserMessageAt DateTime?
+  /// Set when someone who wasn't following followed after the follow prompt
+  followGainedAt DateTime?
+  /// First tap on the link button, and how many taps in total (tracked via /r/<run id>)
+  linkClickedAt DateTime?
+  linkClicks   Int        @default(0)
   error        String?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
@@ -112,6 +120,8 @@ model Run {
   @@index([accountId, publicRepliedAt])
   @@index([accountId, igsid, state])
   @@index([automationId, igsid])
+  @@index([accountId, createdAt])
+  @@index([automationId, createdAt])
 }
 
 /// Webhook message IDs already handled (Meta retries deliveries).

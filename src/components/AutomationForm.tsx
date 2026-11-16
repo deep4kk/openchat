@@ -15,6 +15,13 @@ function Switch({ checked, onChange, label }: { checked: boolean; onChange: (v: 
   );
 }
 
+function formatDelay(s: number) {
+  if (s < 60) return `${s} second${s === 1 ? "" : "s"}`;
+  const m = Math.floor(s / 60);
+  const rest = s % 60;
+  return `${m} minute${m === 1 ? "" : "s"}${rest ? ` ${rest} s` : ""}`;
+}
+
 function Choice({ active, onClick, title, hint }: { active: boolean; onClick: () => void; title: string; hint: string }) {
   return (
     <button type="button" className="choice" aria-pressed={active} onClick={onClick}>
@@ -31,6 +38,10 @@ export function AutomationForm({ id, initial, username }: { id?: string; initial
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [repliesText, setRepliesText] = useState(initial.publicReplies.join("\n"));
+  const [catchUp, setCatchUp] = useState(false);
+  const [delayUnit, setDelayUnit] = useState<"sec" | "min">(
+    initial.replyDelaySeconds >= 60 && initial.replyDelaySeconds % 60 === 0 ? "min" : "sec",
+  );
   const router = useRouter();
 
   const set = <K extends keyof AutomationInput>(key: K, value: AutomationInput[K]) => setV((prev) => ({ ...prev, [key]: value }));
@@ -45,13 +56,26 @@ export function AutomationForm({ id, initial, username }: { id?: string; initial
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(v),
     });
-    setSaving(false);
+    const json = await res.json().catch(() => ({}));
     if (res.ok) {
-      router.push("/dashboard");
-      router.refresh();
+      let target = "/dashboard";
+      if (catchUp && v.active && json.id) {
+        // The automation is saved either way; the dashboard shows how the catch-up went.
+        const r = await fetch(`/api/automations/${json.id}/existing-comments`, { method: "POST" });
+        const out = await r.json().catch(() => ({}));
+        const q: Record<string, string> = r.ok
+          ? Object.fromEntries(
+              ["queued", "tooOld", "skipped", "found", "own", "noCommenter", "notMatching", "posts"].map((k) => [k === "queued" ? "caughtUp" : k, String(out[k] ?? 0)]),
+            )
+          : { catchUpError: String(out.error ?? "Couldn't load the existing comments") };
+        target += `?${new URLSearchParams(q)}`;
+      }
+      setSaving(false);
+      // Pages behind the login are never served from the client cache, so this loads fresh data.
+      router.push(target);
       return;
     }
-    const json = await res.json().catch(() => ({}));
+    setSaving(false);
     setErrors(json.error?.fieldErrors ?? {});
     setFormError(json.error?.formErrors?.[0] ?? (typeof json.error === "string" ? json.error : "Please fix the highlighted fields"));
   }
@@ -60,9 +84,13 @@ export function AutomationForm({ id, initial, username }: { id?: string; initial
     if (!id) return;
     if (!confirmDelete) return setConfirmDelete(true);
     setSaving(true);
-    await fetch(`/api/automations/${id}`, { method: "DELETE" });
+    const res = await fetch(`/api/automations/${id}`, { method: "DELETE" }).catch(() => null);
+    if (!res?.ok) {
+      setSaving(false);
+      setConfirmDelete(false);
+      return setFormError("Couldn't delete the automation. Try again.");
+    }
     router.push("/dashboard");
-    router.refresh();
   }
 
   return (
@@ -151,6 +179,33 @@ export function AutomationForm({ id, initial, username }: { id?: string; initial
             <input type="text" maxLength={20} value={v.openingButton} onChange={(e) => set("openingButton", e.target.value)} />
             {err("openingButton")}
           </label>
+          <div className="field">
+            Delay before replying
+            <div className="row">
+              <input
+                type="number"
+                min={0}
+                max={delayUnit === "min" ? 4 : 240}
+                step={delayUnit === "min" ? "any" : 1}
+                value={delayUnit === "min" ? v.replyDelaySeconds / 60 : v.replyDelaySeconds}
+                onChange={(e) => {
+                  const n = Math.max(0, Number(e.target.value) || 0);
+                  set("replyDelaySeconds", Math.round(delayUnit === "min" ? n * 60 : n));
+                }}
+                style={{ maxWidth: 120 }}
+                aria-label="Delay"
+              />
+              <select value={delayUnit} onChange={(e) => setDelayUnit(e.target.value as "sec" | "min")} style={{ maxWidth: 140 }} aria-label="Delay unit">
+                <option value="sec">Seconds</option>
+                <option value="min">Minutes</option>
+              </select>
+            </div>
+            <span className="small muted">
+              The public reply and this DM go out about {formatDelay(v.replyDelaySeconds)} after the comment (a few random seconds are
+              added so it doesn&apos;t look automated). Up to 4 minutes.
+            </span>
+            {err("replyDelaySeconds")}
+          </div>
         </section>
 
         <section className="card stack">
@@ -200,7 +255,7 @@ export function AutomationForm({ id, initial, username }: { id?: string; initial
 
         <section className="card stack">
           <h2>
-            <span className="step">6</span>DM with the link
+            <span className="step">6</span>Final DM
           </h2>
           <label className="field">
             Message
@@ -209,15 +264,18 @@ export function AutomationForm({ id, initial, username }: { id?: string; initial
           </label>
           <div className="choices">
             <label className="field">
-              Link URL
+              Link URL <span className="small muted">(optional)</span>
               <input type="url" value={v.linkUrl} onChange={(e) => set("linkUrl", e.target.value)} placeholder="https://" />
+              <span className="small muted">Leave empty to send only the message, without a button.</span>
               {err("linkUrl")}
             </label>
-            <label className="field">
-              Button label
-              <input type="text" maxLength={20} value={v.linkButtonLabel} onChange={(e) => set("linkButtonLabel", e.target.value)} />
-              {err("linkButtonLabel")}
-            </label>
+            {v.linkUrl.trim() && (
+              <label className="field">
+                Button label
+                <input type="text" maxLength={20} value={v.linkButtonLabel} onChange={(e) => set("linkButtonLabel", e.target.value)} />
+                {err("linkButtonLabel")}
+              </label>
+            )}
           </div>
         </section>
 
@@ -232,6 +290,20 @@ export function AutomationForm({ id, initial, username }: { id?: string; initial
           <div className="section-title">
             <h2>Active</h2>
             <Switch checked={v.active} onChange={(c) => set("active", c)} label="Active" />
+          </div>
+        </section>
+
+        <section className="card stack">
+          <div className="section-title">
+            <div>
+              <h2>Reply to existing comments</h2>
+              <span className="small muted">
+                When you save, also reply to matching comments already on {v.mediaScope === "ALL_MEDIA" ? "your latest 10 posts" : "these posts"}.
+                Instagram only allows the DM within 7 days of a comment, so older ones are skipped. People who already got this
+                automation are skipped too.
+              </span>
+            </div>
+            <Switch checked={catchUp} onChange={setCatchUp} label="Reply to existing comments" />
           </div>
         </section>
 

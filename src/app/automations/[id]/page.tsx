@@ -11,11 +11,13 @@ export const dynamic = "force-dynamic";
 export default async function EditAutomation({ params }: { params: Promise<{ id: string }> }) {
   const account = await requireAccount();
   const { id } = await params;
-  const row = await db.automation.findFirst({ where: { id, accountId: account.id } });
+  const [row, runs] = await Promise.all([
+    db.automation.findFirst({ where: { id, accountId: account.id } }),
+    db.run.findMany({ where: { automationId: id, accountId: account.id }, orderBy: { createdAt: "desc" }, take: 50 }),
+  ]);
   if (!row) notFound();
 
   const a = parseAutomation(row);
-  const runs = await db.run.findMany({ where: { automationId: id }, orderBy: { createdAt: "desc" }, take: 50 });
 
   return (
     <main className="container">
@@ -46,6 +48,7 @@ export default async function EditAutomation({ params }: { params: Promise<{ id:
           linkUrl: a.linkUrl,
           linkButtonLabel: a.linkButtonLabel,
           oncePerUser: a.oncePerUser,
+          replyDelaySeconds: a.replyDelaySeconds,
         }}
       />
       <section className="card stack" style={{ marginTop: 20 }}>

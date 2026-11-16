@@ -165,3 +165,6 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
 .flow > div { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px; font-size: 14px; }
 .flow strong { display: block; margin-bottom: 2px; }
 .prose td:first-child code { white-space: nowrap; overflow-wrap: normal; }
+.skeleton { display: block; border-radius: 10px; background: var(--surface-2); animation: skeleton-pulse 1.2s ease-in-out infinite alternate; }
+@keyframes skeleton-pulse { from { opacity: 1; } to { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } }

@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { getAccount } from "@/lib/session";
+import { forbidden, getAccount, isSameOrigin } from "@/lib/session";
 import { automationInput, toRow } from "@/lib/automation-schema";
 
 export async function POST(req: Request) {
+  if (!isSameOrigin(req)) return forbidden();
   const account = await getAccount();
   if (!account) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 

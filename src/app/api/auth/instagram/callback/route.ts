@@ -3,18 +3,30 @@ import { NextResponse, type NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { env, isAllowedUsername } from "@/lib/env";
 import { encrypt } from "@/lib/crypto";
-import { exchangeCode, getMe, subscribeWebhooks } from "@/lib/instagram";
-import { createSession } from "@/lib/session";
+import { exchangeCode, getMe, GraphError, subscribeWebhooks } from "@/lib/instagram";
+import { createSession, LOGIN_ERROR_COOKIE } from "@/lib/session";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
-  const fail = (reason: string) => NextResponse.redirect(`${env.appUrl}/?error=${encodeURIComponent(reason)}`);
-
   const jar = await cookies();
+  // The reason travels in a short-lived cookie, not the URL: a link to /?error=<text> must not
+  // be able to put someone else's words on the login page.
+  const fail = (reason: string) => {
+    jar.set(LOGIN_ERROR_COOKIE, reason.slice(0, 300), {
+      httpOnly: true,
+      secure: env.appUrl.startsWith("https://"),
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60,
+    });
+    return NextResponse.redirect(`${env.appUrl}/?error=1`);
+  };
+
   const expected = jar.get("ig_oauth_state")?.value;
   jar.delete("ig_oauth_state");
 
-  if (searchParams.get("error")) return fail(searchParams.get("error_description") ?? "Login cancelled");
+  // error_description comes straight from the URL, so it is never shown.
+  if (searchParams.get("error")) return fail("Instagram login was cancelled or declined.");
   const code = searchParams.get("code");
   if (!code || !expected || searchParams.get("state") !== expected) return fail("Invalid login state, try again");
 
@@ -46,6 +58,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(`${env.appUrl}/dashboard`);
   } catch (err) {
     console.error("[autodm] instagram login failed", err);
-    return fail(err instanceof Error ? err.message : "Instagram login failed");
+    // Instagram's own explanations (wrong redirect URI, missing tester role…) help during setup;
+    // anything else stays in the server log.
+    return fail(err instanceof GraphError ? err.message : "Instagram login failed. Try again; the server log has the details.");
   }
 }
