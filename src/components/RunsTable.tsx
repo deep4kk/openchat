@@ -1,4 +1,5 @@
 import type { Run } from "@prisma/client";
+import { LocalTime } from "./LocalTime";
 
 const STATES: Record<string, { label: string; tone: string }> = {
   QUEUED: { label: "Queued", tone: "" },
@@ -46,7 +47,9 @@ export function RunsTable({ runs, showAutomation }: { runs: (Run & { automation?
                   )}
                   {r.error && <div className="error">{r.error}</div>}
                 </td>
-                <td className="small muted">{r.createdAt.toLocaleString()}</td>
+                <td className="small muted">
+                  <LocalTime iso={r.createdAt.toISOString()} />
+                </td>
               </tr>
             );
           })}

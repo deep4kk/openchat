@@ -375,10 +375,10 @@ async function sendQueuedRun(run: Run & { account: Account; automation: Automati
       }
     }
 
-    await sendOpener(token, run, automation);
+    const dmUserId = await sendOpener(token, run, automation);
     await db.run.update({
       where: { id: run.id },
-      data: { state: "PRIVATE_REPLIED", privateRepliedAt: new Date(), error: null },
+      data: { state: "PRIVATE_REPLIED", privateRepliedAt: new Date(), error: null, ...(dmUserId ? { dmUserId } : {}) },
     });
   } catch (err) {
     const attempts = run.sendAttempts + 1;
@@ -395,18 +395,23 @@ async function sendQueuedRun(run: Run & { account: Account; automation: Automati
   }
 }
 
-/** The one allowed private reply. Falls back to plain text if Instagram rejects the button. */
-async function sendOpener(token: string, run: Run, automation: ParsedAutomation) {
+/**
+ * The one allowed private reply. Falls back to plain text if Instagram rejects the button.
+ * Returns the recipient's ID in DMs as Instagram reports it (see continueRun).
+ */
+async function sendOpener(token: string, run: Run, automation: ParsedAutomation): Promise<string | undefined> {
   const to: Recipient = { comment_id: run.commentId };
   try {
-    await sendMessage(token, to, {
+    const res = await sendMessage(token, to, {
       text: automation.openingMessage,
       quick_replies: [{ content_type: "text", title: automation.openingButton, payload: payload.gate(run.id) }],
     });
+    return res.recipient_id;
   } catch (err) {
     if (!(err instanceof GraphError) || err.isAuth || err.isRateLimit || err.isTransient) throw err;
     // Any text reply from the user also continues the flow (see handleMessaging).
-    await sendMessage(token, to, { text: `${automation.openingMessage}\n\nReply "${automation.openingButton}" to continue.` });
+    const res = await sendMessage(token, to, { text: `${automation.openingMessage}\n\nReply "${automation.openingButton}" to continue.` });
+    return res.recipient_id;
   }
 }
 
@@ -436,22 +441,33 @@ async function handleMessaging(account: Account, event: MessagingEvent) {
 }
 
 async function continueRun(account: Account, igsid: string, runId?: string) {
-  // A tap carries its run ID. Any other message from someone mid-flow counts as a
-  // tap too, so the flow still works if their client didn't show the button.
+  // A tap carries its run ID, and that alone identifies the run: the button only ever exists in
+  // the private DM to that commenter, and the event is signed by Meta. The sender's ID is not
+  // compared, because Instagram can report a different ID for the same person in DMs than it
+  // did on their comment; requiring them to match would silently drop every tap.
+  // Any other message from someone mid-flow counts as a tap too, so the flow still works if
+  // their client didn't show the button.
   const run = runId
-    ? await db.run.findFirst({ where: { id: runId, accountId: account.id, igsid } })
+    ? await db.run.findFirst({ where: { id: runId, accountId: account.id } })
     : await db.run.findFirst({
-        where: { accountId: account.id, igsid, state: { in: ["PRIVATE_REPLIED", "AWAITING_FOLLOW"] } },
+        where: { accountId: account.id, OR: [{ igsid }, { dmUserId: igsid }], state: { in: ["PRIVATE_REPLIED", "AWAITING_FOLLOW"] } },
         orderBy: { createdAt: "desc" },
       });
-  if (!run || !["PRIVATE_REPLIED", "AWAITING_FOLLOW", "DELIVERED"].includes(run.state)) return;
+  if (!run) {
+    // Worth a line in the log: without it a dropped tap leaves no trace at all.
+    if (runId) console.warn("[autodm] tap ignored: its run no longer exists");
+    return;
+  }
+  if (!["PRIVATE_REPLIED", "AWAITING_FOLLOW", "DELIVERED"].includes(run.state)) return;
   if (run.lastUserMessageAt && Date.now() - run.lastUserMessageAt.getTime() < DEBOUNCE_MS) return;
+  if (run.igsid !== igsid && run.dmUserId !== igsid) console.log("[autodm] tap matched by run ID; the sender's DM ID differs from the comment's");
 
   // Compare-and-set claim: on serverless hosts two taps can land on different
   // instances, where the in-process lock doesn't reach. Only one claim wins.
   const claimed = await db.run.updateMany({
     where: { id: run.id, lastUserMessageAt: run.lastUserMessageAt },
-    data: { lastUserMessageAt: new Date() },
+    // The sender's ID is kept so a typed reply (no button, no run ID) finds this run too.
+    data: { lastUserMessageAt: new Date(), ...(run.igsid !== igsid ? { dmUserId: igsid } : {}) },
   });
   if (claimed.count === 0) return;
 

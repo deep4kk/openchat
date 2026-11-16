@@ -293,6 +293,54 @@ describe("reply delay", () => {
   });
 });
 
+describe("taps when Instagram uses a different ID in DMs than on the comment", () => {
+  test("the button tap still continues the run, and so does a typed reply afterwards", async () => {
+    await makeAutomation({ askToFollow: true });
+    await comment("C1", "link", { from: "COMMENT_ID_OF_FAN" });
+    await drain();
+    const r = await run("C1");
+    take();
+
+    // The tap arrives from the same person under their DM ID.
+    await tap("m1", `GATE:${r.id}`, "DM_ID_OF_FAN");
+    let after = await run("C1");
+    assert.equal(after.state, "AWAITING_FOLLOW", "not following yet, so they are asked to follow");
+    assert.ok(after.lastUserMessageAt, "the tap is counted");
+    assert.equal(after.dmUserId, "DM_ID_OF_FAN");
+    const ask = take();
+    assert.deepEqual(ask.at(-1)?.to, { id: "DM_ID_OF_FAN" }, "the reply goes to the ID the tap came from");
+
+    // They follow, then type something instead of tapping the button: no run ID in that message.
+    follows = true;
+    await age(r.id);
+    await handleWebhook({
+      object: "instagram",
+      entry: [{ id: "BIZ", time: 0, messaging: [{ sender: { id: "DM_ID_OF_FAN" }, recipient: { id: "BIZ" }, timestamp: 0, message: { mid: "m2", text: "done" } }] }],
+    });
+    after = await run("C1");
+    assert.equal(after.state, "DELIVERED");
+    assert.ok(after.followGainedAt, "counted as a follower gained");
+  });
+
+  test("a tap for a run of another account is ignored", async () => {
+    await makeAutomation();
+    await comment("C1", "link");
+    await drain();
+    const r = await run("C1");
+    take();
+    const other = await db.account.create({
+      data: { igUserId: "BIZ2", username: "other", accessToken: encrypt("tok", "test-key"), tokenExpiresAt: new Date(Date.now() + 50 * 864e5) },
+    });
+    await handleWebhook({
+      object: "instagram",
+      entry: [{ id: "BIZ2", time: 0, messaging: [{ sender: { id: "FAN" }, recipient: { id: "BIZ2" }, timestamp: 0, message: { mid: "m9", text: "tap", quick_reply: { payload: `GATE:${r.id}` } } }] }],
+    });
+    await db.account.delete({ where: { id: other.id } });
+    assert.equal((await run("C1")).state, "PRIVATE_REPLIED");
+    assert.deepEqual(take(), []);
+  });
+});
+
 describe("existing comments", () => {
   test("queues recent matching comments once; skips old, own, non-matching and repeat people", async () => {
     await makeAutomation();

@@ -96,6 +96,8 @@ model Run {
   mediaId      String
   /// Instagram-scoped ID of the commenter
   igsid        String
+  /// The same person's ID in DMs, when Instagram reports a different one there than on the comment
+  dmUserId     String?
   username     String?
   /// "QUEUED" | "SENDING" | "PRIVATE_REPLIED" | "AWAITING_FOLLOW" | "DELIVERED" | "ABANDONED" | "EXPIRED" | "FAILED"
   state        String
@@ -121,6 +123,7 @@ model Run {
   @@index([accountId, igsid, state])
   @@index([automationId, igsid])
   @@index([accountId, createdAt])
+  @@index([accountId, dmUserId])
   @@index([automationId, createdAt])
 }
 
