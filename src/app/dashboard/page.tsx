@@ -111,9 +111,14 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
       <section className="card stack" style={{ marginBottom: 20 }}>
         <div className="section-title">
           <h2>Automations</h2>
-          <Link href="/automations/new" className="btn btn-primary">
-            + New automation
-          </Link>
+          <div className="row">
+            <Link href="/automations/import" className="btn">
+              Import CSV
+            </Link>
+            <Link href="/automations/new" className="btn btn-primary">
+              + New automation
+            </Link>
+          </div>
         </div>
         {automations.length === 0 ? (
           <p className="muted">

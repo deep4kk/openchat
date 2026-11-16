@@ -159,10 +159,10 @@ export type IgMedia = {
   timestamp: string;
 };
 
-export async function listMedia(token: string, after?: string) {
+export async function listMedia(token: string, after?: string, limit = 30) {
   const params = new URLSearchParams({
     fields: "id,caption,media_type,media_product_type,media_url,thumbnail_url,permalink,timestamp",
-    limit: "30",
+    limit: String(limit),
     access_token: token,
   });
   if (after) params.set("after", after);
