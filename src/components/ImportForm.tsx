@@ -143,6 +143,66 @@ export function ImportForm({ initial, username }: { initial: ImportOptions; user
         )}
       </section>
 
+      <section className="card stack">
+        <div className="section-title" style={{ marginBottom: 0 }}>
+          <h2>
+            <span className="step">4</span>Ask to follow before sending
+          </h2>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={o.askToFollow}
+            aria-label="Ask to follow"
+            className="switch"
+            onClick={() => set("askToFollow", !o.askToFollow)}
+          />
+        </div>
+        <p className="small muted" style={{ margin: 0 }}>
+          {o.askToFollow
+            ? "After the tap, AutoDM checks whether the person follows you. Followers get the text from your file right away; everyone else is asked to follow first."
+            : "Off: everyone who taps the button gets the text from your file, whether they follow you or not."}
+        </p>
+        {o.askToFollow && (
+          <>
+            <label className="field">
+              Message for people who don&apos;t follow you yet
+              <textarea value={o.followMessage} onChange={(e) => set("followMessage", e.target.value)} />
+            </label>
+            <div className="choices">
+              <label className="field">
+                &quot;Visit profile&quot; button
+                <input type="text" maxLength={20} value={o.followVisitLabel} onChange={(e) => set("followVisitLabel", e.target.value)} />
+              </label>
+              <label className="field">
+                &quot;I&apos;m following&quot; button
+                <input type="text" maxLength={20} value={o.followConfirmLabel} onChange={(e) => set("followConfirmLabel", e.target.value)} />
+              </label>
+            </div>
+            <div className="choices">
+              <label className="field">
+                Ask up to
+                <span className="hint">Times the follow request is sent</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={o.followMaxAttempts}
+                  onChange={(e) => set("followMaxAttempts", Math.min(10, Math.max(1, Math.round(Number(e.target.value)) || 1)))}
+                />
+              </label>
+              <label className="field">
+                If they still don&apos;t follow
+                <span className="hint">After the last attempt</span>
+                <select value={o.followOnFail} onChange={(e) => set("followOnFail", e.target.value as ImportOptions["followOnFail"])}>
+                  <option value="SEND_ANYWAY">Send the text anyway</option>
+                  <option value="STOP">Don&apos;t send it</option>
+                </select>
+              </label>
+            </div>
+          </>
+        )}
+      </section>
+
       {error && <div className="banner-error">{error}</div>}
 
       {items && (

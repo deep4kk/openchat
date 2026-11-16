@@ -11,6 +11,12 @@ const options: ImportOptions = {
   publicReplies: defaults.publicReplies,
   openingMessage: defaults.openingMessage,
   openingButton: defaults.openingButton,
+  askToFollow: false,
+  followMessage: defaults.followMessage,
+  followVisitLabel: defaults.followVisitLabel,
+  followConfirmLabel: defaults.followConfirmLabel,
+  followMaxAttempts: defaults.followMaxAttempts,
+  followOnFail: defaults.followOnFail,
 };
 const reel = (code: string, id: string, caption?: string) => ({ id, permalink: `https://www.instagram.com/reel/${code}/`, caption });
 
@@ -51,6 +57,19 @@ test("each row becomes an automation for its reel, with the row's text as the fi
   assert.equal(plan[0].createdAt?.toISOString(), "2026-11-16T15:31:52.172Z");
   assert.equal(plan[1].input!.active, false, "status other than Active imports paused");
   assert.equal(plan[1].name, "Paused one example.com/x", "falls back to the message when the reel has no caption");
+});
+
+test("the follow gate chosen for the import is applied to every automation", () => {
+  const csv = [HEADER, "one example.com/a,REEL,Active,0,0,,https://www.instagram.com/reel/AAA/,mybiz", "two example.com/b,REEL,Active,0,0,,https://www.instagram.com/reel/BBB/,mybiz"].join("\n");
+  const gate = { ...options, askToFollow: true, followMessage: "Follow me first 🙏", followMaxAttempts: 2, followOnFail: "STOP" as const };
+  const plan = planImport(readRows(csv), [reel("AAA", "111"), reel("BBB", "222")], new Set(), "mybiz", gate);
+  for (const p of plan) {
+    assert.equal(p.status, "ready");
+    assert.equal(p.input!.askToFollow, true);
+    assert.equal(p.input!.followMessage, "Follow me first 🙏");
+    assert.equal(p.input!.followMaxAttempts, 2);
+    assert.equal(p.input!.followOnFail, "STOP");
+  }
 });
 
 test("rows that can't or shouldn't be imported are skipped with a reason", () => {

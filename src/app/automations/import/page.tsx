@@ -20,6 +20,12 @@ export default async function ImportAutomations() {
           publicReplies: defaults.publicReplies,
           openingMessage: defaults.openingMessage,
           openingButton: defaults.openingButton,
+          askToFollow: true,
+          followMessage: defaults.followMessage,
+          followVisitLabel: defaults.followVisitLabel,
+          followConfirmLabel: defaults.followConfirmLabel,
+          followMaxAttempts: defaults.followMaxAttempts,
+          followOnFail: defaults.followOnFail,
         }}
       />
     </main>

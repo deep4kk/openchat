@@ -23,6 +23,12 @@ const body = z.object({
     publicReplies: true,
     openingMessage: true,
     openingButton: true,
+    askToFollow: true,
+    followMessage: true,
+    followVisitLabel: true,
+    followConfirmLabel: true,
+    followMaxAttempts: true,
+    followOnFail: true,
   }),
 });
 

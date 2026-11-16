@@ -90,7 +90,19 @@ export function readRows(csv: string): ImportRow[] {
 /** What the export can't tell us, chosen once for every imported automation. */
 export type ImportOptions = Pick<
   AutomationInput,
-  "triggerType" | "keywords" | "publicReplyEnabled" | "publicReplies" | "openingMessage" | "openingButton"
+  | "triggerType"
+  | "keywords"
+  | "publicReplyEnabled"
+  | "publicReplies"
+  | "openingMessage"
+  | "openingButton"
+  // The follow gate: ask non-followers to follow before they get the row's text.
+  | "askToFollow"
+  | "followMessage"
+  | "followVisitLabel"
+  | "followConfirmLabel"
+  | "followMaxAttempts"
+  | "followOnFail"
 >;
 
 export type ImportMedia = { id: string; permalink: string; caption?: string; thumbnail?: string };
@@ -156,7 +168,6 @@ export function planImport(
           ...(found.thumbnail?.startsWith("https://") && found.thumbnail.length <= 2048 ? { thumbnail: found.thumbnail } : {}),
         },
       ],
-      askToFollow: false,
       linkMessage: r.message,
       linkUrl: "",
       linkButtonLabel: "",
