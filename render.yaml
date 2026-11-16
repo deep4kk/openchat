@@ -1,0 +1,41 @@
+# Render Blueprint: the always-on queue worker + the PostgreSQL database.
+# The website itself runs on Vercel. Full guide: docs/DEPLOY.md (also /docs/hosting in the app).
+#
+# Render → New → Blueprint → pick this repo. Render asks for each `sync: false` value:
+# paste the SAME values you put in Vercel (TOKEN_ENCRYPTION_KEY especially, or the
+# worker can't read the saved Instagram logins).
+services:
+  - type: worker
+    name: autodm-worker
+    runtime: node
+    plan: starter # background workers have no free plan on Render
+    buildCommand: npm ci && npm run db:push
+    startCommand: npm run worker
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: autodm-db
+          property: connectionString
+      - key: APP_URL
+        sync: false
+      - key: INSTAGRAM_APP_ID
+        sync: false
+      - key: INSTAGRAM_APP_SECRET
+        sync: false
+      - key: WEBHOOK_VERIFY_TOKEN
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: TOKEN_ENCRYPTION_KEY
+        sync: false
+      - key: NEXT_TELEMETRY_DISABLED
+        value: "1"
+      - key: CHECKPOINT_DISABLE
+        value: "1"
+
+databases:
+  - name: autodm-db
+    # The "free" plan is deleted 30 days after creation, along with your data.
+    plan: basic-256mb

@@ -1,0 +1,129 @@
+// SQLite, for running locally. Hosted deployments use prisma/postgres/schema.prisma
+// automatically when DATABASE_URL is a postgres:// URL (see scripts/prisma.mjs).
+// Lists are stored as JSON strings so the schema works on both.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// One connected Instagram professional account = one user of this app.
+model Account {
+  id             String       @id @default(cuid())
+  /// Instagram professional account ID (matches webhook entry.id)
+  igUserId       String       @unique
+  /// App-scoped Instagram user ID (used by Meta's deauthorize / data deletion callbacks)
+  igScopedId     String?      @unique
+  username       String
+  name           String?
+  profilePicture String?
+  /// AES-256-GCM encrypted long-lived token
+  accessToken    String
+  tokenExpiresAt DateTime
+  /// "ACTIVE" | "RECONNECT" (token revoked/expired; nothing is sent until the user logs in again)
+  status         String       @default("ACTIVE")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  automations    Automation[]
+  runs           Run[]
+}
+
+model Automation {
+  id              String   @id @default(cuid())
+  accountId       String
+  account         Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  name            String
+  active          Boolean  @default(true)
+
+  /// "SPECIFIC_MEDIA" | "ALL_MEDIA"
+  mediaScope      String   @default("SPECIFIC_MEDIA")
+  /// JSON string[] of media IDs (used when mediaScope = SPECIFIC_MEDIA)
+  mediaIds        String   @default("[]")
+  /// JSON {id, thumbnail, caption, permalink}[] snapshot for the dashboard
+  mediaPreview    String   @default("[]")
+
+  /// "KEYWORDS" | "ANY_COMMENT"
+  triggerType     String   @default("KEYWORDS")
+  /// JSON string[]
+  keywords        String   @default("[]")
+
+  publicReplyEnabled Boolean @default(true)
+  /// JSON string[]; one is picked at random per comment
+  publicReplies   String   @default("[]")
+
+  /// First DM (the one Meta private reply). Carries the button the user taps.
+  openingMessage  String
+  openingButton   String   @default("Send me the link")
+
+  askToFollow     Boolean  @default(false)
+  followMessage   String   @default("Looks like you're not following yet. Follow us and tap the button below to get your link 👇")
+  followVisitLabel   String @default("Visit profile")
+  followConfirmLabel String @default("I'm following ✅")
+  followMaxAttempts  Int    @default(3)
+  /// "SEND_ANYWAY" | "STOP"
+  followOnFail    String   @default("SEND_ANYWAY")
+
+  linkMessage     String
+  linkUrl         String
+  linkButtonLabel String   @default("Open link")
+
+  /// Only run once per Instagram user per automation
+  oncePerUser     Boolean  @default(true)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  runs            Run[]
+
+  @@index([accountId, active])
+}
+
+/// One commenter going through one automation.
+model Run {
+  id           String     @id @default(cuid())
+  accountId    String
+  account      Account    @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  automationId String
+  automation   Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  commentId    String     @unique
+  commentText  String
+  mediaId      String
+  /// Instagram-scoped ID of the commenter
+  igsid        String
+  username     String?
+  /// "QUEUED" | "SENDING" | "PRIVATE_REPLIED" | "AWAITING_FOLLOW" | "DELIVERED" | "ABANDONED" | "EXPIRED" | "FAILED"
+  state        String
+  followAttempts Int      @default(0)
+  /// When the queue may next try the public reply + opening DM
+  nextAttemptAt DateTime  @default(now())
+  sendAttempts Int        @default(0)
+  publicRepliedAt  DateTime?
+  privateRepliedAt DateTime?
+  lastUserMessageAt DateTime?
+  error        String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([state, nextAttemptAt])
+  @@index([accountId, privateRepliedAt])
+  @@index([accountId, publicRepliedAt])
+  @@index([accountId, igsid, state])
+  @@index([automationId, igsid])
+}
+
+/// Webhook message IDs already handled (Meta retries deliveries).
+model ProcessedEvent {
+  id        String   @id
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+/// Log of Meta data-deletion requests, so the status URL can confirm them.
+model DeletionRequest {
+  code      String   @id
+  createdAt DateTime @default(now())
+}

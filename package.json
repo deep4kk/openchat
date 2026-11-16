@@ -1,0 +1,35 @@
+{
+  "name": "autodm",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "dev": "next dev",
+    "build": "node scripts/prisma.mjs generate && next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test \"test/**/*.test.{ts,mts}\"",
+    "db:push": "node scripts/prisma.mjs db push --skip-generate",
+    "postinstall": "node scripts/prisma.mjs generate",
+    "setup": "node scripts/setup.mjs",
+    "worker": "tsx scripts/worker.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.3",
+    "next": "15.5.28",
+    "react": "19.1.10",
+    "react-dom": "19.1.10",
+    "tsx": "^4.20.6",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "prisma": "6.19.3",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20.9"
+  }
+}
