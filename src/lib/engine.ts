@@ -31,6 +31,7 @@ import {
   sendMessage,
   tokenFor,
   type Button,
+  type OutgoingMessage,
   type Recipient,
 } from "./instagram";
 
@@ -423,23 +424,51 @@ async function sendQueuedRun(run: Run & { account: Account; automation: Automati
   }
 }
 
+/** Longest text Instagram accepts in a message with attached buttons. */
+const BUTTON_TEXT_MAX = 640;
+/** Set once Instagram has refused the attached-button opener but accepted a simpler one, so it isn't retried on every comment. */
+let attachedButtonRefused = false;
+/** Forgets that refusal, so the attached button is tried again (used by the tests). */
+export function retryAttachedButton() {
+  attachedButtonRefused = false;
+}
+
 /**
- * The one allowed private reply. Falls back to plain text if Instagram rejects the button.
+ * The one allowed private reply (a refused attempt doesn't use it up). Tried in order:
+ *  1. the message with the button attached under it, which stays in the chat;
+ *  2. the message with a quick-reply chip, which sits above the keyboard and vanishes once used;
+ *  3. plain text asking for a reply (any reply continues the flow, see handleMessaging).
  * Returns the recipient's ID in DMs as Instagram reports it (see continueRun).
  */
 async function sendOpener(token: string, run: Run, automation: ParsedAutomation): Promise<string | undefined> {
   const to: Recipient = { comment_id: run.commentId };
-  try {
-    const res = await sendMessage(token, to, {
-      text: automation.openingMessage,
-      quick_replies: [{ content_type: "text", title: automation.openingButton, payload: payload.gate(run.id) }],
-    });
-    return res.recipient_id;
-  } catch (err) {
-    if (!(err instanceof GraphError) || err.isAuth || err.isRateLimit || err.isTransient) throw err;
-    // Any text reply from the user also continues the flow (see handleMessaging).
-    const res = await sendMessage(token, to, { text: `${automation.openingMessage}\n\nReply "${automation.openingButton}" to continue.` });
-    return res.recipient_id;
+  const text = automation.openingMessage;
+  const title = automation.openingButton;
+  const tap = payload.gate(run.id);
+  const attempts: { label: string; message: OutgoingMessage }[] = [
+    ...(text.length <= BUTTON_TEXT_MAX && !attachedButtonRefused
+      ? [{
+          label: "attached button",
+          message: { attachment: { type: "template" as const, payload: { template_type: "button" as const, text, buttons: [{ type: "postback" as const, title, payload: tap }] } } },
+        }]
+      : []),
+    { label: "quick reply", message: { text, quick_replies: [{ content_type: "text" as const, title, payload: tap }] } },
+    { label: "plain text", message: { text: `${text}\n\nReply "${title}" to continue.` } },
+  ];
+
+  let refused: string | undefined;
+  for (const [i, attempt] of attempts.entries()) {
+    try {
+      const res = await sendMessage(token, to, attempt.message);
+      if (refused === "attached button") attachedButtonRefused = true;
+      trace(`opening DM sent with ${attempt.label}${refused ? ` (Instagram refused the ${refused})` : ""}`);
+      return res.recipient_id;
+    } catch (err) {
+      // Only a refusal of this message format is worth a simpler try; anything else fails the same way again.
+      const formatRefused = err instanceof GraphError && !err.isAuth && !err.isRateLimit && !err.isTransient;
+      if (!formatRefused || i === attempts.length - 1) throw err;
+      refused ??= attempt.label;
+    }
   }
 }
 

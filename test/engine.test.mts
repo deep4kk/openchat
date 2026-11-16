@@ -18,7 +18,17 @@ process.env.ALLOWED_IG_USERNAMES = "@MyBiz, other";
 execSync("npx prisma db push --skip-generate", { stdio: "ignore", env: process.env });
 
 // ---- Instagram API mock ----
-type Sent = { kind: "public_reply" | "dm"; to?: unknown; text?: string; buttons?: string[]; urls?: (string | undefined)[]; quickReply?: string };
+type Sent = {
+  kind: "public_reply" | "dm";
+  to?: unknown;
+  text?: string;
+  buttons?: string[];
+  urls?: (string | undefined)[];
+  /** What tapping the opener's button sends back, whichever kind of button it is. */
+  tapPayload?: string;
+  /** "button" (attached under the message), "generic" (card), "quick_reply" or "text". */
+  format?: string;
+};
 let sent: Sent[] = [];
 let follows = false;
 /** Comments returned by the mocked GET /{media}/comments. */
@@ -40,10 +50,11 @@ globalThis.fetch = (async (input: string | URL, init: RequestInit = {}) => {
     sent.push({
       kind: "dm",
       to: body.recipient,
-      text: m.text ?? m.attachment?.payload?.elements?.[0]?.title,
-      buttons: m.attachment?.payload?.elements?.[0]?.buttons?.map((b: { title: string }) => b.title),
+      text: m.text ?? m.attachment?.payload?.text ?? m.attachment?.payload?.elements?.[0]?.title,
+      buttons: (m.attachment?.payload?.buttons ?? m.attachment?.payload?.elements?.[0]?.buttons)?.map((b: { title: string }) => b.title),
       urls: m.attachment?.payload?.elements?.[0]?.buttons?.map((b: { url?: string }) => b.url),
-      quickReply: m.quick_replies?.[0]?.payload,
+      tapPayload: m.quick_replies?.[0]?.payload ?? m.attachment?.payload?.buttons?.[0]?.payload,
+      format: m.attachment?.payload?.template_type ?? (m.quick_replies ? "quick_reply" : "text"),
     });
   } else if (url.includes("/comments?")) {
     return new Response(JSON.stringify({ data: existing }));
@@ -55,7 +66,7 @@ globalThis.fetch = (async (input: string | URL, init: RequestInit = {}) => {
 
 const { db } = await import("../src/lib/db.ts");
 const { encrypt } = await import("../src/lib/crypto.ts");
-const { handleWebhook, processQueue, queueExistingComments } = await import("../src/lib/engine.ts");
+const { handleWebhook, processQueue, queueExistingComments, retryAttachedButton } = await import("../src/lib/engine.ts");
 const { toRow, defaults } = await import("../src/lib/automation-schema.ts");
 
 let accountId = "";
@@ -118,6 +129,7 @@ beforeEach(async () => {
   follows = false;
   failures = [];
   existing = [];
+  retryAttachedButton();
   delete process.env.MAX_DMS_PER_HOUR;
 });
 
@@ -150,7 +162,9 @@ describe("triggers", () => {
     const out = take();
     assert.equal(out[0].kind, "public_reply");
     assert.deepEqual(out[1].to, { comment_id: "C1" });
-    assert.equal(out[1].quickReply, `GATE:${r.id}`);
+    assert.equal(out[1].tapPayload, `GATE:${r.id}`);
+    assert.equal(out[1].format, "button", "the button is attached under the message");
+    assert.deepEqual(out[1].buttons, ["Send me the link"]);
   });
 
   test("accounts not in ALLOWED_IG_USERNAMES are ignored", async () => {
@@ -448,20 +462,45 @@ describe("account safety", () => {
     assert.deepEqual(take(), []);
   });
 
-  test("falls back to plain text if Instagram rejects the opener button", async () => {
+  test("falls back to plain text if Instagram rejects both kinds of opener button", async () => {
     await makeAutomation();
     await comment("C1", "link");
-    failures = [{ match: "/me/messages", times: 1, status: 400, code: 100 }];
+    failures = [{ match: "/me/messages", times: 2, status: 400, code: 100 }];
     await drain();
     assert.equal((await run("C1")).state, "PRIVATE_REPLIED");
     const dm = take().find((s) => s.kind === "dm");
     assert.match(dm?.text ?? "", /Reply "Send me the link" to continue/);
   });
 
+  test("a message too long for an attached button goes out with a quick reply instead", async () => {
+    await makeAutomation({ openingMessage: "x".repeat(700) });
+    await comment("C1", "link");
+    await drain();
+    const r = await run("C1");
+    assert.equal(r.state, "PRIVATE_REPLIED");
+    const dm = take().find((s) => s.kind === "dm");
+    assert.equal(dm?.format, "quick_reply");
+    assert.equal(dm?.tapPayload, `GATE:${r.id}`);
+  });
+
+  test("if Instagram refuses the attached button, the quick reply is used, for later comments too", async () => {
+    await makeAutomation({ oncePerUser: false });
+    await comment("C1", "link");
+    failures = [{ match: "/me/messages", times: 1, status: 400, code: 100 }];
+    await drain();
+    const first = take().filter((s) => s.kind === "dm");
+    assert.deepEqual(first.map((s) => s.format), ["quick_reply"], "the refused attempt sent nothing");
+    assert.equal(first[0].tapPayload, `GATE:${(await run("C1")).id}`);
+
+    await comment("C2", "link", { from: "FAN2" });
+    await drain();
+    assert.deepEqual(take().filter((s) => s.kind === "dm").map((s) => s.format), ["quick_reply"], "no wasted attempt on the next comment");
+  });
+
   test("permanent errors are recorded, not retried forever", async () => {
     await makeAutomation({ publicReplyEnabled: false });
     await comment("C1", "link");
-    failures = [{ match: "/me/messages", times: 2, status: 400, code: 10 }];
+    failures = [{ match: "/me/messages", times: 3, status: 400, code: 10 }];
     await drain();
     const r = await run("C1");
     assert.equal(r.state, "FAILED");

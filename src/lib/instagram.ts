@@ -208,6 +208,8 @@ export type Button =
 
 export type OutgoingMessage =
   | { text: string; quick_replies?: QuickReply[] }
+  // Text with buttons attached under the bubble (text up to 640 characters, up to 3 buttons).
+  | { attachment: { type: "template"; payload: { template_type: "button"; text: string; buttons: Button[] } } }
   | {
       attachment: {
         type: "template";

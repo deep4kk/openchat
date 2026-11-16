@@ -117,6 +117,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .bubble.me { background: var(--bubble-me); color: #fff; justify-self: end; }
 .bubble-card { justify-self: start; max-width: 82%; border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
 .bubble-card .title { padding: 10px 12px; font-weight: 600; white-space: pre-wrap; }
+.bubble-card .title.text { font-weight: 400; background: var(--bubble-them); }
 .bubble-card .cbtn { border-top: 1px solid var(--border); padding: 8px; text-align: center; color: var(--bubble-me); font-weight: 600; }
 .quick { justify-self: end; border: 1px solid var(--bubble-me); color: var(--bubble-me); border-radius: 99px; padding: 4px 12px; font-weight: 600; font-size: 13px; }
 .divider { text-align: center; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }

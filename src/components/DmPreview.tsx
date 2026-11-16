@@ -11,8 +11,10 @@ export function DmPreview({ v, username }: { v: AutomationInput; username: strin
         {v.publicReplyEnabled && v.publicReplies[0] && <div className="bubble them small">↳ {v.publicReplies[0]}</div>}
 
         <div className="divider">DM</div>
-        <div className="bubble them">{v.openingMessage}</div>
-        <div className="quick">{v.openingButton}</div>
+        <div className="bubble-card">
+          <div className="title text">{v.openingMessage}</div>
+          <div className="cbtn">{v.openingButton}</div>
+        </div>
 
         {v.askToFollow && (
           <>
