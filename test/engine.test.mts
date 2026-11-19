@@ -74,7 +74,7 @@ let automationId = "";
 
 async function makeAutomation(over: Partial<typeof defaults> = {}) {
   const a = await db.automation.create({
-    data: { ...toRow({ ...defaults, mediaIds: ["REEL1"], linkUrl: "https://my.link", ...over }), accountId },
+    data: { ...toRow({ ...defaults, triggerType: "KEYWORDS", mediaIds: ["REEL1"], linkUrl: "https://my.link", ...over }), accountId },
   });
   automationId = a.id;
   return a;
@@ -172,7 +172,7 @@ describe("triggers", () => {
       data: { igUserId: "STRANGER", username: "stranger", accessToken: encrypt("tok", "test-key"), tokenExpiresAt: new Date(Date.now() + 50 * 864e5) },
     });
     await db.automation.create({
-      data: { ...toRow({ ...defaults, mediaIds: ["REEL9"], linkUrl: "https://x.link" }), accountId: stranger.id },
+      data: { ...toRow({ ...defaults, triggerType: "KEYWORDS", mediaIds: ["REEL9"], linkUrl: "https://x.link" }), accountId: stranger.id },
     });
     await handleWebhook({
       object: "instagram",

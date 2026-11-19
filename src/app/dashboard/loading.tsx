@@ -16,12 +16,11 @@ export default function DashboardLoading() {
           </div>
         ))}
       </div>
-      <section className="card stack" style={{ marginBottom: 20 }}>
-        <h2>Automations</h2>
-        <span className="skeleton" style={{ height: 120 }} />
-      </section>
       <section className="card stack">
-        <h2>Recent activity</h2>
+        <div className="tabs">
+          <span className="tab" aria-selected="true">Automations</span>
+          <span className="tab">Recent activity</span>
+        </div>
         <span className="skeleton" style={{ height: 240 }} />
       </section>
     </main>

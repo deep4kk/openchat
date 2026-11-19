@@ -1,16 +1,18 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { getAccount, sessionAccountId } from "@/lib/session";
 import { parseAutomation } from "@/lib/automation-schema";
 import { Topbar } from "@/components/Topbar";
-import { ActiveToggle } from "@/components/ActiveToggle";
-import { RunsTable } from "@/components/RunsTable";
+import { DashboardTabs, type AutomationRow } from "@/components/DashboardTabs";
+import type { FeedRun } from "@/components/ActivityFeed";
 import { DeleteAccountButton } from "@/components/DeleteAccountButton";
 
 export const dynamic = "force-dynamic";
 
-type Search = Partial<Record<"caughtUp" | "tooOld" | "skipped" | "found" | "own" | "noCommenter" | "notMatching" | "posts" | "catchUpError", string>>;
+/** The activity tab pages through this many of the newest comments in the browser. */
+const FEED_LIMIT = 500;
+
+type Search = Partial<Record<"caughtUp" | "tooOld" | "skipped" | "found" | "own" | "noCommenter" | "notMatching" | "posts" | "catchUpError" | "tab", string>>;
 
 export default async function Dashboard({ searchParams }: { searchParams: Promise<Search> }) {
   // The cookie already names the account, so its data loads alongside the account check
@@ -32,7 +34,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
     db.run.findMany({
       where: { accountId },
       orderBy: { createdAt: "desc" },
-      take: 20,
+      take: FEED_LIMIT,
       include: { automation: { select: { name: true } } },
     }),
   ]);
@@ -48,6 +50,36 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   const [dmsSent, taps, clicked, followers]: Metric[] = ["privateRepliedAt", "lastUserMessageAt", "linkClickedAt", "followGainedAt"];
   const sum = (metric: Metric, automationId?: string) => total(metric, automationId);
 
+  // Only what the tabs render crosses over to the browser.
+  const automationRows: AutomationRow[] = automations.map((a) => ({
+    id: a.id,
+    name: a.name,
+    active: a.active,
+    where: a.mediaScope === "ALL_MEDIA" ? "All posts & reels" : `${a.mediaIds.length} selected`,
+    trigger: a.triggerType === "ANY_COMMENT" ? "Any comment" : a.keywords.join(", "),
+    followGate: a.askToFollow,
+    runs: tally(a.id),
+    dmsSent: sum(dmsSent, a.id),
+    taps: sum(taps, a.id),
+    delivered: tally(a.id, "DELIVERED"),
+    clicks: sum(clicked, a.id),
+    followers: sum(followers, a.id),
+  }));
+  const feed: FeedRun[] = recent.map((r) => ({
+    id: r.id,
+    username: r.username,
+    igsid: r.igsid,
+    commentText: r.commentText,
+    state: r.state,
+    error: r.error,
+    followAttempts: r.followAttempts,
+    followGainedAt: r.followGainedAt?.toISOString() ?? null,
+    linkClicks: r.linkClicks,
+    createdAt: r.createdAt.toISOString(),
+    automationId: r.automationId,
+    automationName: r.automation?.name ?? "Deleted automation",
+  }));
+
   return (
     <main className="container">
       <Topbar account={account} />
@@ -62,7 +94,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
       {Number.isFinite(caughtUp) && (
         <div className="banner-ok" style={{ marginBottom: 20 }}>
           {caughtUp > 0
-            ? `Replying to ${caughtUp} existing comment${caughtUp === 1 ? "" : "s"}, a few seconds apart. Watch them in Activity below.`
+            ? `Replying to ${caughtUp} existing comment${caughtUp === 1 ? "" : "s"}, a few seconds apart. Watch them come in below.`
             : "No existing comments needed a reply."}
           {tooOld > 0 && ` ${tooOld} matching comment${tooOld === 1 ? " was" : "s were"} older than 7 days, which Instagram doesn't allow a DM for.`}
           {search.found !== undefined && (
@@ -108,76 +140,12 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
         </div>
       </div>
 
-      <section className="card stack" style={{ marginBottom: 20 }}>
-        <div className="section-title">
-          <h2>Automations</h2>
-          <div className="row">
-            <Link href="/automations/import" className="btn">
-              Import CSV
-            </Link>
-            <Link href="/automations/new" className="btn btn-primary">
-              + New automation
-            </Link>
-          </div>
-        </div>
-        {automations.length === 0 ? (
-          <p className="muted">
-            No automations yet. Create one to start replying to comments and sending DMs.
-          </p>
-        ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>On</th>
-                  <th>Name</th>
-                  <th>Where</th>
-                  <th>Trigger</th>
-                  <th>Follow gate</th>
-                  <th>Runs</th>
-                  <th>DMs sent</th>
-                  <th>Taps</th>
-                  <th>Delivered</th>
-                  <th>Clicks</th>
-                  <th>New followers</th>
-                </tr>
-              </thead>
-              <tbody>
-                {automations.map((a) => (
-                  <tr key={a.id}>
-                    <td>
-                      <ActiveToggle id={a.id} active={a.active} />
-                    </td>
-                    <td>
-                      <Link href={`/automations/${a.id}`}>
-                        <strong>{a.name}</strong>
-                      </Link>
-                    </td>
-                    <td className="small">
-                      {a.mediaScope === "ALL_MEDIA" ? "All posts & reels" : `${a.mediaIds.length} selected`}
-                    </td>
-                    <td className="small">
-                      {a.triggerType === "ANY_COMMENT" ? "Any comment" : a.keywords.join(", ")}
-                    </td>
-                    <td className="small">{a.askToFollow ? "On" : "Off"}</td>
-                    <td>{tally(a.id)}</td>
-                    <td>{sum(dmsSent, a.id)}</td>
-                    <td>{sum(taps, a.id)}</td>
-                    <td>{tally(a.id, "DELIVERED")}</td>
-                    <td>{sum(clicked, a.id)}</td>
-                    <td>{a.askToFollow || sum(followers, a.id) ? sum(followers, a.id) : "–"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <section className="card stack">
-        <h2>Recent activity</h2>
-        <RunsTable runs={recent} showAutomation />
-      </section>
+      <DashboardTabs
+        automations={automationRows}
+        runs={feed}
+        runsCapped={recent.length === FEED_LIMIT}
+        initialTab={search.tab === "activity" || Number.isFinite(caughtUp) ? "activity" : "automations"}
+      />
 
       <section className="card stack" style={{ marginTop: 20 }}>
         <h2>Your data</h2>

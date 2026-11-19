@@ -1,7 +1,7 @@
 import type { Run } from "@prisma/client";
 import { LocalTime } from "./LocalTime";
 
-const STATES: Record<string, { label: string; tone: string }> = {
+export const STATES: Record<string, { label: string; tone: string }> = {
   QUEUED: { label: "Queued", tone: "" },
   SENDING: { label: "Sending…", tone: "" },
   EXPIRED: { label: "Expired (7-day limit)", tone: "warn" },

@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { AutomationInput } from "@/lib/automation-schema";
 import { ChipsInput } from "./ChipsInput";
-import { MediaPicker } from "./MediaPicker";
+import { MediaPicker, type PickedMedia } from "./MediaPicker";
+import { ReplyVariations } from "./ReplyVariations";
 import { DmPreview } from "./DmPreview";
 
 type FieldErrors = Partial<Record<keyof AutomationInput, string[]>>;
@@ -31,13 +32,28 @@ function Choice({ active, onClick, title, hint }: { active: boolean; onClick: ()
   );
 }
 
+/** A name from the picked reels' captions: the first line, without hashtags, the way CSV imports name them. */
+function nameFromMedia(scope: AutomationInput["mediaScope"], picked: PickedMedia[]) {
+  if (scope === "ALL_MEDIA") return "All posts & reels";
+  if (picked.length === 0) return null;
+  const line =
+    (picked[0].caption ?? "")
+      .split(/\r?\n/)
+      .map((l) => l.replace(/#[\p{L}\p{N}_]+/gu, "").replace(/\s+/g, " ").trim())
+      .find(Boolean) ?? "";
+  const base = line.length > 60 ? `${line.slice(0, 60).replace(/\s+\S*$/, "")}…` : line || "Untitled reel";
+  return picked.length > 1 ? `${base} + ${picked.length - 1} more` : base;
+}
+
 export function AutomationForm({ id, initial, username }: { id?: string; initial: AutomationInput; username: string }) {
   const [v, setV] = useState<AutomationInput>(initial);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [repliesText, setRepliesText] = useState(initial.publicReplies.join("\n"));
+  // A new automation is named after the reel it runs on until the name is edited by hand.
+  const [nameTouched, setNameTouched] = useState(Boolean(id));
+  const [editingName, setEditingName] = useState(false);
   const [catchUp, setCatchUp] = useState(false);
   const [delayUnit, setDelayUnit] = useState<"sec" | "min">(
     initial.replyDelaySeconds >= 60 && initial.replyDelaySeconds % 60 === 0 ? "min" : "sec",
@@ -45,6 +61,12 @@ export function AutomationForm({ id, initial, username }: { id?: string; initial
   const router = useRouter();
 
   const set = <K extends keyof AutomationInput>(key: K, value: AutomationInput[K]) => setV((prev) => ({ ...prev, [key]: value }));
+  const autoName = (scope: AutomationInput["mediaScope"], picked: PickedMedia[]) => {
+    if (nameTouched) return {};
+    const name = nameFromMedia(scope, picked);
+    return name ? { name } : {};
+  };
+  const setScope = (scope: AutomationInput["mediaScope"]) => setV((prev) => ({ ...prev, mediaScope: scope, ...autoName(scope, prev.mediaPreview) }));
   const err = (key: keyof AutomationInput) => errors[key]?.[0] && <span className="error">{errors[key]![0]}</span>;
 
   async function save() {
@@ -97,11 +119,40 @@ export function AutomationForm({ id, initial, username }: { id?: string; initial
     <div className="editor">
       <div className="stack">
         <section className="card stack">
-          <label className="field">
-            Automation name
-            <input type="text" value={v.name} onChange={(e) => set("name", e.target.value)} />
+          <div className="field">
+            <span className="small muted">Automation name</span>
+            {editingName ? (
+              <div className="row" style={{ flexWrap: "nowrap" }}>
+                <input
+                  type="text"
+                  autoFocus
+                  maxLength={80}
+                  value={v.name}
+                  aria-label="Automation name"
+                  onChange={(e) => {
+                    setNameTouched(true);
+                    set("name", e.target.value);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === "Escape") setEditingName(false);
+                  }}
+                  onBlur={() => setEditingName(false)}
+                />
+                <button type="button" className="btn btn-sm" onClick={() => setEditingName(false)}>
+                  Done
+                </button>
+              </div>
+            ) : (
+              <div className="name-display">
+                <strong className={v.name.trim() ? "" : "muted"}>{v.name.trim() || "Untitled automation"}</strong>
+                <button type="button" className="btn btn-sm" onClick={() => setEditingName(true)}>
+                  ✎ Edit
+                </button>
+              </div>
+            )}
+            {!nameTouched && <span className="small muted">Filled in from the reel you pick. Edit it any time.</span>}
             {err("name")}
-          </label>
+          </div>
         </section>
 
         <section className="card stack">
@@ -109,13 +160,15 @@ export function AutomationForm({ id, initial, username }: { id?: string; initial
             <span className="step">1</span>Where should it run?
           </h2>
           <div className="choices">
-            <Choice active={v.mediaScope === "SPECIFIC_MEDIA"} onClick={() => set("mediaScope", "SPECIFIC_MEDIA")} title="Specific posts or reels" hint="Pick one or more from your feed" />
-            <Choice active={v.mediaScope === "ALL_MEDIA"} onClick={() => set("mediaScope", "ALL_MEDIA")} title="All posts & reels" hint="Including ones you post later" />
+            <Choice active={v.mediaScope === "SPECIFIC_MEDIA"} onClick={() => setScope("SPECIFIC_MEDIA")} title="Specific posts or reels" hint="Pick one or more from your feed" />
+            <Choice active={v.mediaScope === "ALL_MEDIA"} onClick={() => setScope("ALL_MEDIA")} title="All posts & reels" hint="Including ones you post later" />
           </div>
           {v.mediaScope === "SPECIFIC_MEDIA" && (
             <MediaPicker
               selected={v.mediaPreview}
-              onChange={(picked) => setV((prev) => ({ ...prev, mediaPreview: picked, mediaIds: picked.map((p) => p.id) }))}
+              onChange={(picked) =>
+                setV((prev) => ({ ...prev, mediaPreview: picked, mediaIds: picked.map((p) => p.id), ...autoName(prev.mediaScope, picked) }))
+              }
             />
           )}
           {err("mediaIds")}
@@ -126,8 +179,8 @@ export function AutomationForm({ id, initial, username }: { id?: string; initial
             <span className="step">2</span>Which comments trigger it?
           </h2>
           <div className="choices">
-            <Choice active={v.triggerType === "KEYWORDS"} onClick={() => set("triggerType", "KEYWORDS")} title="Comments with keywords" hint="e.g. LINK, guide, price" />
             <Choice active={v.triggerType === "ANY_COMMENT"} onClick={() => set("triggerType", "ANY_COMMENT")} title="Any comment" hint="Every commenter gets the DM" />
+            <Choice active={v.triggerType === "KEYWORDS"} onClick={() => set("triggerType", "KEYWORDS")} title="Comments with keywords" hint="e.g. LINK, guide, price" />
           </div>
           {v.triggerType === "KEYWORDS" && (
             <label className="field">
@@ -147,18 +200,12 @@ export function AutomationForm({ id, initial, username }: { id?: string; initial
             <Switch checked={v.publicReplyEnabled} onChange={(c) => set("publicReplyEnabled", c)} label="Public reply" />
           </div>
           {v.publicReplyEnabled && (
-            <label className="field">
-              Reply variations
-              <span className="hint">One is picked at random each time, so your replies don&apos;t look like spam. One per line.</span>
-              <textarea
-                value={repliesText}
-                onChange={(e) => {
-                  setRepliesText(e.target.value);
-                  set("publicReplies", e.target.value.split("\n").map((l) => l.trim()).filter(Boolean));
-                }}
-              />
+            <div className="field">
+              <strong className="small">Reply variations</strong>
+              <span className="small muted">One is picked at random each time, so your replies don&apos;t look like spam. Empty boxes are skipped.</span>
+              <ReplyVariations value={v.publicReplies} onChange={(r) => set("publicReplies", r)} />
               {err("publicReplies")}
-            </label>
+            </div>
           )}
         </section>
 

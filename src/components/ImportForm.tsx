@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { ImportOptions, PlanItem } from "@/lib/import";
 import { ChipsInput } from "./ChipsInput";
+import { ReplyVariations } from "./ReplyVariations";
 
 type Item = Pick<PlanItem, "row" | "permalink" | "name" | "status" | "note">;
 
@@ -19,7 +20,6 @@ export function ImportForm({ initial, username }: { initial: ImportOptions; user
   const [csv, setCsv] = useState<string | null>(null);
   const [fileName, setFileName] = useState("");
   const [o, setO] = useState<ImportOptions>(initial);
-  const [repliesText, setRepliesText] = useState(initial.publicReplies.join("\n"));
   const [items, setItems] = useState<Item[] | null>(null);
   const [busy, setBusy] = useState<"check" | "import" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -129,17 +129,11 @@ export function ImportForm({ initial, username }: { initial: ImportOptions; user
           />
         </div>
         {o.publicReplyEnabled && (
-          <label className="field">
-            Reply variations
-            <span className="hint">One is picked at random each time. One per line.</span>
-            <textarea
-              value={repliesText}
-              onChange={(e) => {
-                setRepliesText(e.target.value);
-                set("publicReplies", e.target.value.split("\n").map((l) => l.trim()).filter(Boolean));
-              }}
-            />
-          </label>
+          <div className="field">
+            <strong className="small">Reply variations</strong>
+            <span className="small muted">One is picked at random each time. Empty boxes are skipped.</span>
+            <ReplyVariations value={o.publicReplies} onChange={(r) => set("publicReplies", r)} />
+          </div>
         )}
       </section>
 
