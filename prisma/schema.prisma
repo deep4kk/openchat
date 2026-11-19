@@ -26,10 +26,25 @@ model Account {
   tokenExpiresAt DateTime
   /// "ACTIVE" | "RECONNECT" (token revoked/expired; nothing is sent until the user logs in again)
   status         String       @default("ACTIVE")
+  /// Part of every session cookie; logging out bumps it, which ends every session on every device
+  sessionVersion Int          @default(0)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   automations    Automation[]
   runs           Run[]
+  allowedAs      AllowedClaim[]
+}
+
+/// Ties a username from ALLOWED_IG_USERNAMES to the Instagram account that first logged in with it,
+/// so a rename doesn't lock the owner out and whoever takes the old handle can't get in.
+model AllowedClaim {
+  /// Lowercase username as written in ALLOWED_IG_USERNAMES
+  username  String   @id
+  accountId String
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@index([accountId])
 }
 
 model Automation {

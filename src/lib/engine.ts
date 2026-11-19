@@ -19,7 +19,9 @@
 import type { Account, Automation, Run } from "@prisma/client";
 import { Prisma } from "@prisma/client";
 import { db } from "./db";
-import { env, isAllowedUsername, limits } from "./env";
+import { limits } from "./env";
+import { allowedClaimsInclude, isAllowedAccount } from "./allowlist";
+import { clickUrl, tapPayload, validRunSig } from "./links";
 import { parseAutomation, type ParsedAutomation } from "./automation-schema";
 import { payload, pickRandom, selectAutomation } from "./matching";
 import {
@@ -82,12 +84,12 @@ export async function handleWebhook(body: WebhookBody) {
       .filter((k) => k !== "id" && k !== "time")
       .map((k) => (k === "changes" ? `changes(${(entry.changes ?? []).map((c) => c.field).join(",")})` : k))
       .join("+");
-    const account = await db.account.findUnique({ where: { igUserId: String(entry.id) } });
+    const account = await db.account.findUnique({ where: { igUserId: String(entry.id) }, include: allowedClaimsInclude() });
     if (!account) {
       trace(`webhook [${shape}] ignored: no connected account has this entry ID`);
       continue;
     }
-    if (!isAllowedUsername(account.username)) {
+    if (!(await isAllowedAccount(account))) {
       trace(`webhook [${shape}] ignored: account is not in ALLOWED_IG_USERNAMES`);
       continue;
     }
@@ -444,7 +446,7 @@ async function sendOpener(token: string, run: Run, automation: ParsedAutomation)
   const to: Recipient = { comment_id: run.commentId };
   const text = automation.openingMessage;
   const title = automation.openingButton;
-  const tap = payload.gate(run.id);
+  const tap = tapPayload("GATE", run.id);
   const attempts: { label: string; message: OutgoingMessage }[] = [
     ...(text.length <= BUTTON_TEXT_MAX && !attachedButtonRefused
       ? [{
@@ -502,23 +504,34 @@ async function handleMessaging(account: Account, event: MessagingEvent) {
   const raw = event.message?.quick_reply?.payload ?? event.postback?.payload;
   const tapped = payload.parse(raw);
   trace(`${kind} received: ${tapped ? `button ${tapped.kind}` : raw ? "button with an unknown payload" : "no button payload"}`);
-  await withLock(`${account.id}:${igsid}`, () => continueRun(account, igsid, tapped?.runId));
+  await withLock(`${account.id}:${igsid}`, () => continueRun(account, igsid, tapped?.runId, tapped?.sig));
 }
 
-async function continueRun(account: Account, igsid: string, runId?: string) {
-  // A tap carries its run ID, and that alone identifies the run: the button only ever exists in
-  // the private DM to that commenter, and the event is signed by Meta. The sender's ID is not
-  // compared, because Instagram can report a different ID for the same person in DMs than it
-  // did on their comment; requiring them to match would silently drop every tap.
-  // Any other message from someone mid-flow counts as a tap too, so the flow still works if
-  // their client didn't show the button.
-  const run = runId
-    ? await db.run.findFirst({ where: { id: runId, accountId: account.id } })
-    : await db.run.findFirst({
-        where: { accountId: account.id, OR: [{ igsid }, { dmUserId: igsid }], state: { in: ["PRIVATE_REPLIED", "AWAITING_FOLLOW"] } },
-        orderBy: { createdAt: "desc" },
-      });
-  if (!run) return trace(runId ? "tap ignored: its run no longer exists" : "message ignored: this person has no run waiting for a tap");
+/** The run a message belongs to: the newest one where this person still has a step to take. */
+const waitingRunOf = (accountId: string, igsid: string) =>
+  db.run.findFirst({
+    where: { accountId, OR: [{ igsid }, { dmUserId: igsid }], state: { in: ["PRIVATE_REPLIED", "AWAITING_FOLLOW"] } },
+    orderBy: { createdAt: "desc" },
+  });
+
+async function continueRun(account: Account, igsid: string, runId?: string, sig?: string) {
+  // A signed tap identifies its run on its own: only we can sign a run ID, and the button only
+  // ever exists in the private DM to that commenter. The sender's ID is not compared, because
+  // Instagram can report a different ID for the same person in DMs than it did on their comment;
+  // requiring them to match would silently drop every tap.
+  // Buttons sent before taps were signed carry a bare run ID; that is only trusted from the
+  // run's own commenter. Any other message from someone mid-flow counts as a tap too, so the
+  // flow still works if their client didn't show the button.
+  const signed = Boolean(runId && validRunSig(runId, sig));
+  let run: Run | null;
+  if (signed) run = await db.run.findFirst({ where: { id: runId, accountId: account.id } });
+  else {
+    if (runId) trace("tap without a valid signature: matched by sender instead");
+    run =
+      (runId ? await db.run.findFirst({ where: { id: runId, accountId: account.id, OR: [{ igsid }, { dmUserId: igsid }] } }) : null) ??
+      (await waitingRunOf(account.id, igsid));
+  }
+  if (!run) return trace(signed ? "tap ignored: its run no longer exists" : "message ignored: this person has no run waiting for a tap");
   if (!["PRIVATE_REPLIED", "AWAITING_FOLLOW", "DELIVERED"].includes(run.state)) return trace(`tap ignored: run is ${run.state}`);
   if (run.lastUserMessageAt && Date.now() - run.lastUserMessageAt.getTime() < DEBOUNCE_MS) return trace("tap ignored: double tap");
   if (run.igsid !== igsid && run.dmUserId !== igsid) trace("tap matched by run ID; the sender's DM ID differs from the comment's");
@@ -571,7 +584,7 @@ async function continueRun(account: Account, igsid: string, runId?: string) {
 
     await sendCard(token, to, automation.followMessage, `Follow @${account.username} to continue`, [
       { type: "web_url", title: automation.followVisitLabel, url: `https://www.instagram.com/${account.username}/` },
-      { type: "postback", title: automation.followConfirmLabel, payload: payload.recheck(run.id) },
+      { type: "postback", title: automation.followConfirmLabel, payload: tapPayload("RECHECK", run.id) },
     ]);
     await db.run.update({
       where: { id: run.id },
@@ -590,8 +603,8 @@ async function continueRun(account: Account, igsid: string, runId?: string) {
 async function deliverLink(token: string, to: Recipient, run: Run, automation: ParsedAutomation) {
   if (automation.linkUrl) {
     await sendCard(token, to, automation.linkMessage, "👇 Tap below", [
-      // Goes through /r/<run id>, which counts the tap and redirects to the real link.
-      { type: "web_url", title: automation.linkButtonLabel || "Open link", url: `${env.appUrl}/r/${run.id}` },
+      // Goes through /r/<run id>.<signature>, which counts the tap and redirects to the real link.
+      { type: "web_url", title: automation.linkButtonLabel || "Open link", url: clickUrl(run.id) },
     ]);
   } else {
     // No link: the final DM is just the message.

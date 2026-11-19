@@ -15,8 +15,8 @@ const mediaId = z.string().regex(/^[\w-]{1,64}$/, "Invalid post ID");
 const MAX_MEDIA = 200;
 const httpsUrl = z.string().max(2048).refine((u) => u.startsWith("https://"), "Must be an https link");
 
-export const automationInput = z
-  .object({
+/** The fields on their own, without the cross-field checks below (the CSV import picks from these). */
+export const automationFields = z.object({
     name: z.string().trim().min(1).max(80),
     active: z.boolean().default(true),
     mediaScope: z.enum(["SPECIFIC_MEDIA", "ALL_MEDIA"]),
@@ -48,8 +48,9 @@ export const automationInput = z
     oncePerUser: z.boolean(),
     // Capped at 4 minutes: on Vercel the wait happens inside the webhook request (5-minute limit).
     replyDelaySeconds: z.number().int().min(0).max(240, "The delay can be at most 4 minutes"),
-  })
-  .superRefine((v, ctx) => {
+});
+
+export const automationInput = automationFields.superRefine((v, ctx) => {
     if (v.mediaScope === "SPECIFIC_MEDIA" && v.mediaIds.length === 0)
       ctx.addIssue({ code: "custom", path: ["mediaIds"], message: "Pick at least one post or reel" });
     if (v.triggerType === "KEYWORDS" && v.keywords.length === 0)

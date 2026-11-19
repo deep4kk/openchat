@@ -2,8 +2,10 @@ import { randomBytes } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { env } from "@/lib/env";
 import { authorizeUrl } from "@/lib/instagram";
+import { allow, tooMany } from "@/lib/rate-limit";
 
 export async function GET(req: NextRequest) {
+  if (!allow(req, "login", 30, 10 * 60_000)) return tooMany();
   // Login must start on APP_URL (e.g. the https tunnel), otherwise the session
   // cookie lands on a different host than the one Instagram redirects back to.
   const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");

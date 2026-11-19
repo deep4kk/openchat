@@ -11,7 +11,9 @@ import { join } from "node:path";
 
 const dir = mkdtempSync(join(tmpdir(), "autodm-test-"));
 process.env.DATABASE_URL = `file:${join(dir, "test.db")}`;
-process.env.TOKEN_ENCRYPTION_KEY = "test-key";
+const KEY = "test-key-test-key-test-key-test-key";
+process.env.TOKEN_ENCRYPTION_KEY = KEY;
+process.env.SESSION_SECRET = "test-session-secret-test-session-secret";
 process.env.MIN_SEND_GAP_MS = "1";
 process.env.APP_URL = "https://autodm.test";
 process.env.ALLOWED_IG_USERNAMES = "@MyBiz, other";
@@ -68,6 +70,8 @@ const { db } = await import("../src/lib/db.ts");
 const { encrypt } = await import("../src/lib/crypto.ts");
 const { handleWebhook, processQueue, queueExistingComments, retryAttachedButton } = await import("../src/lib/engine.ts");
 const { toRow, defaults } = await import("../src/lib/automation-schema.ts");
+const { clickUrl, tapPayload } = await import("../src/lib/links.ts");
+const { mayLogIn } = await import("../src/lib/allowlist.ts");
 
 let accountId = "";
 let automationId = "";
@@ -115,7 +119,7 @@ const take = () => sent.splice(0);
 
 before(async () => {
   const account = await db.account.create({
-    data: { igUserId: "BIZ", username: "mybiz", accessToken: encrypt("tok", "test-key"), tokenExpiresAt: new Date(Date.now() + 50 * 864e5) },
+    data: { igUserId: "BIZ", username: "mybiz", accessToken: encrypt("tok", KEY), tokenExpiresAt: new Date(Date.now() + 50 * 864e5) },
   });
   accountId = account.id;
 });
@@ -162,14 +166,14 @@ describe("triggers", () => {
     const out = take();
     assert.equal(out[0].kind, "public_reply");
     assert.deepEqual(out[1].to, { comment_id: "C1" });
-    assert.equal(out[1].tapPayload, `GATE:${r.id}`);
+    assert.equal(out[1].tapPayload, tapPayload("GATE", r.id));
     assert.equal(out[1].format, "button", "the button is attached under the message");
     assert.deepEqual(out[1].buttons, ["Send me the link"]);
   });
 
   test("accounts not in ALLOWED_IG_USERNAMES are ignored", async () => {
     const stranger = await db.account.create({
-      data: { igUserId: "STRANGER", username: "stranger", accessToken: encrypt("tok", "test-key"), tokenExpiresAt: new Date(Date.now() + 50 * 864e5) },
+      data: { igUserId: "STRANGER", username: "stranger", accessToken: encrypt("tok", KEY), tokenExpiresAt: new Date(Date.now() + 50 * 864e5) },
     });
     await db.automation.create({
       data: { ...toRow({ ...defaults, triggerType: "KEYWORDS", mediaIds: ["REEL9"], linkUrl: "https://x.link" }), accountId: stranger.id },
@@ -203,24 +207,25 @@ describe("follow gate", () => {
     const { id } = await run("C1");
     take();
 
-    await tap("M1", `GATE:${id}`);
+    await tap("M1", tapPayload("GATE", id));
     assert.equal((await run("C1")).state, "AWAITING_FOLLOW");
     assert.deepEqual(take().at(-1)?.buttons, ["Visit profile", "I'm following ✅"]);
 
-    await tap("M1", `GATE:${id}`); // same webhook delivered again
-    await tap("M2", `RECHECK:${id}`, "FAN", true); // second tap within debounce window
+    await tap("M1", tapPayload("GATE", id)); // same webhook delivered again
+    await tap("M2", tapPayload("RECHECK", id), "FAN", true); // second tap within debounce window
     assert.deepEqual(take(), []);
 
     follows = true;
     await age(id);
-    await tap("M3", `RECHECK:${id}`, "FAN", true);
+    await tap("M3", tapPayload("RECHECK", id), "FAN", true);
     const done = await run("C1");
     assert.equal(done.state, "DELIVERED");
     assert.ok(done.followGainedAt, "counts as a follower won by the automation");
     const last = take().at(-1);
     assert.deepEqual(last?.buttons, ["Open link"]);
     // The link button goes through the click tracker.
-    assert.deepEqual(last?.urls, [`https://autodm.test/r/${id}`]);
+    assert.deepEqual(last?.urls, [clickUrl(id)]);
+    assert.match(clickUrl(id), new RegExp(`^https://autodm\\.test/r/${id}\\.[0-9a-f]{24}$`));
   });
 
   test("someone already following is not counted as a new follower", async () => {
@@ -229,7 +234,7 @@ describe("follow gate", () => {
     await comment("C1", "link");
     await drain();
     const { id } = await run("C1");
-    await tap("M1", `GATE:${id}`);
+    await tap("M1", tapPayload("GATE", id));
     const done = await run("C1");
     assert.equal(done.state, "DELIVERED");
     assert.equal(done.followGainedAt, null);
@@ -242,7 +247,7 @@ describe("follow gate", () => {
     const { id } = await run("C1");
     for (const mid of ["A", "B", "C"]) {
       await age(id);
-      await tap(mid, `RECHECK:${id}`, "FAN", true);
+      await tap(mid, tapPayload("RECHECK", id), "FAN", true);
     }
     const r = await run("C1");
     assert.equal(r.state, "ABANDONED");
@@ -254,9 +259,9 @@ describe("follow gate", () => {
     await comment("C1", "link");
     await drain();
     const { id } = await run("C1");
-    await tap("A", `GATE:${id}`);
+    await tap("A", tapPayload("GATE", id));
     await age(id);
-    await tap("B", `RECHECK:${id}`, "FAN", true);
+    await tap("B", tapPayload("RECHECK", id), "FAN", true);
     assert.equal((await run("C1")).state, "DELIVERED");
     assert.equal((await run("C1")).followGainedAt, null, "sent anyway, never followed");
   });
@@ -278,7 +283,7 @@ describe("follow gate", () => {
     await drain();
     const { id } = await run("C1");
     take();
-    await tap("A", `GATE:${id}`);
+    await tap("A", tapPayload("GATE", id));
     const dms = take().filter((s) => s.kind === "dm");
     assert.equal(dms.length, 1);
     assert.equal(dms[0].text, "Here's the prompt: paste it into Claude");
@@ -316,7 +321,7 @@ describe("taps when Instagram uses a different ID in DMs than on the comment", (
     take();
 
     // The tap arrives from the same person under their DM ID.
-    await tap("m1", `GATE:${r.id}`, "DM_ID_OF_FAN");
+    await tap("m1", tapPayload("GATE", r.id), "DM_ID_OF_FAN");
     let after = await run("C1");
     assert.equal(after.state, "AWAITING_FOLLOW", "not following yet, so they are asked to follow");
     assert.ok(after.lastUserMessageAt, "the tap is counted");
@@ -343,15 +348,66 @@ describe("taps when Instagram uses a different ID in DMs than on the comment", (
     const r = await run("C1");
     take();
     const other = await db.account.create({
-      data: { igUserId: "BIZ2", username: "other", accessToken: encrypt("tok", "test-key"), tokenExpiresAt: new Date(Date.now() + 50 * 864e5) },
+      data: { igUserId: "BIZ2", username: "other", accessToken: encrypt("tok", KEY), tokenExpiresAt: new Date(Date.now() + 50 * 864e5) },
     });
     await handleWebhook({
       object: "instagram",
-      entry: [{ id: "BIZ2", time: 0, messaging: [{ sender: { id: "FAN" }, recipient: { id: "BIZ2" }, timestamp: 0, message: { mid: "m9", text: "tap", quick_reply: { payload: `GATE:${r.id}` } } }] }],
+      entry: [{ id: "BIZ2", time: 0, messaging: [{ sender: { id: "FAN" }, recipient: { id: "BIZ2" }, timestamp: 0, message: { mid: "m9", text: "tap", quick_reply: { payload: tapPayload("GATE", r.id) } } }] }],
     });
     await db.account.delete({ where: { id: other.id } });
     assert.equal((await run("C1")).state, "PRIVATE_REPLIED");
     assert.deepEqual(take(), []);
+  });
+});
+
+describe("signed taps", () => {
+  test("a bare run ID (button sent before signing) only counts from the run's own commenter", async () => {
+    await makeAutomation();
+    await comment("C1", "link");
+    await drain();
+    const r = await run("C1");
+    take();
+
+    await tap("x1", `GATE:${r.id}`, "SOMEONE_ELSE");
+    assert.equal((await run("C1")).state, "PRIVATE_REPLIED", "a stranger can't use a run ID they saw");
+    assert.deepEqual(take(), []);
+
+    await tap("x2", `GATE:${r.id}`, "FAN");
+    assert.equal((await run("C1")).state, "DELIVERED", "the commenter's own old button still works");
+  });
+
+  test("a forged signature is not trusted", async () => {
+    await makeAutomation();
+    await comment("C1", "link");
+    await drain();
+    const r = await run("C1");
+    take();
+    await tap("x1", `GATE:${r.id}.${"0".repeat(24)}`, "SOMEONE_ELSE");
+    assert.equal((await run("C1")).state, "PRIVATE_REPLIED");
+    assert.deepEqual(take(), []);
+  });
+});
+
+describe("allowlist claims", () => {
+  test("the first account with a listed name claims it; a later owner of that name can't log in", async () => {
+    await makeAutomation();
+    await comment("C1", "link"); // any webhook for the connected account claims its listed name
+    assert.equal(await mayLogIn("BIZ", "mybiz"), true);
+    assert.equal(await mayLogIn("NEWCOMER", "mybiz"), false, "the name is taken by BIZ");
+    assert.equal(await mayLogIn("NEWCOMER", "nobody"), false, "not on the list");
+  });
+
+  test("the owner keeps access after renaming, while the old name stays listed", async () => {
+    await makeAutomation();
+    await comment("C1", "link");
+    await db.account.update({ where: { id: accountId }, data: { username: "renamed_biz" } });
+    try {
+      assert.equal(await mayLogIn("BIZ", "renamed_biz"), true);
+      await comment("C2", "link", { from: "FAN2" });
+      assert.ok(await db.run.findUnique({ where: { commentId: "C2" } }), "webhooks for the renamed account are still handled");
+    } finally {
+      await db.account.update({ where: { id: accountId }, data: { username: "mybiz" } });
+    }
   });
 });
 
@@ -480,7 +536,7 @@ describe("account safety", () => {
     assert.equal(r.state, "PRIVATE_REPLIED");
     const dm = take().find((s) => s.kind === "dm");
     assert.equal(dm?.format, "quick_reply");
-    assert.equal(dm?.tapPayload, `GATE:${r.id}`);
+    assert.equal(dm?.tapPayload, tapPayload("GATE", r.id));
   });
 
   test("if Instagram refuses the attached button, the quick reply is used, for later comments too", async () => {
@@ -490,7 +546,7 @@ describe("account safety", () => {
     await drain();
     const first = take().filter((s) => s.kind === "dm");
     assert.deepEqual(first.map((s) => s.format), ["quick_reply"], "the refused attempt sent nothing");
-    assert.equal(first[0].tapPayload, `GATE:${(await run("C1")).id}`);
+    assert.equal(first[0].tapPayload, tapPayload("GATE", (await run("C1")).id));
 
     await comment("C2", "link", { from: "FAN2" });
     await drain();

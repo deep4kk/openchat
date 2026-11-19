@@ -94,5 +94,5 @@ refuses changes that would lose data.
 | Vercel build fails at Prisma | `DATABASE_URL` must start with `postgresql://`. Deploy Render first so the tables exist. |
 | Runs stay "Queued" | The Render worker isn't running. Its log should say `[autodm] Worker started`. |
 | Worker log: "Worker not started, missing settings" | Add the listed variables on Render and redeploy. The worker waits instead of exiting. |
-| "@name can't use this copy" after logging in | Add that username to `ALLOWED_IG_USERNAMES` on Vercel and redeploy. |
+| "@name can't use this copy" after logging in | Add that username to `ALLOWED_IG_USERNAMES` on Vercel and redeploy. If the name is already listed, another Instagram account logged in with it first. |
 | Logins work but sends fail with decryption errors | `TOKEN_ENCRYPTION_KEY` differs between Vercel and Render. |

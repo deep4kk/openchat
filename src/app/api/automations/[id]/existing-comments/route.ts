@@ -28,7 +28,9 @@ export async function POST(req: Request, { params }: Ctx) {
     if (err instanceof GraphError && err.isAuth) {
       return NextResponse.json({ error: "Instagram login expired. Reconnect Instagram and try again." }, { status: 409 });
     }
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: `Couldn't load the existing comments: ${message}`.slice(0, 300) }, { status: 502 });
+    // Instagram's own explanation helps; anything else (database, decryption…) stays in the server log.
+    console.error("[autodm] existing comments failed", err);
+    const message = err instanceof GraphError ? `Couldn't load the existing comments: ${err.message}` : "Couldn't load the existing comments. Try again; the server log has the details.";
+    return NextResponse.json({ error: message.slice(0, 300) }, { status: 502 });
   }
 }

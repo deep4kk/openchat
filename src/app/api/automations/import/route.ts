@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { forbidden, getAccount, isSameOrigin } from "@/lib/session";
-import { automationInput, parseAutomation, toRow } from "@/lib/automation-schema";
+import { automationFields, parseAutomation, toRow } from "@/lib/automation-schema";
 import { GraphError, listMedia, tokenFor } from "@/lib/instagram";
 import { planImport, readRows, shortcodeOf, type ImportMedia } from "@/lib/import";
 
@@ -16,7 +16,7 @@ const body = z.object({
   csv: z.string().min(1).max(1_000_000),
   /** true: only report what would happen. */
   dryRun: z.boolean(),
-  options: automationInput.innerType().pick({
+  options: automationFields.pick({
     triggerType: true,
     keywords: true,
     publicReplyEnabled: true,

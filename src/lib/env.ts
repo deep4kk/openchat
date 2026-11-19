@@ -13,9 +13,15 @@ const REQUIRED = [
   "TOKEN_ENCRYPTION_KEY",
 ] as const;
 
+/** Keys that sign cookies and encrypt Instagram logins: short ones could be guessed. `openssl rand -hex 32` gives 64. */
+const SECRETS: readonly string[] = ["SESSION_SECRET", "TOKEN_ENCRYPTION_KEY"];
+const MIN_SECRET_LENGTH = 32;
+const tooShort = (name: string) => SECRETS.includes(name) && (process.env[name] ?? "").length < MIN_SECRET_LENGTH;
+
 function required(name: (typeof REQUIRED)[number]): string {
   const value = process.env[name];
   if (!value) throw new Error(`Missing environment variable ${name}. See docs/SETUP.md`);
+  if (tooShort(name)) throw new Error(`${name} must be at least ${MIN_SECRET_LENGTH} characters (openssl rand -hex 32). See docs/SETUP.md`);
   return value;
 }
 
@@ -24,9 +30,9 @@ function int(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-/** Names of required settings that are empty, so the UI can show a setup checklist. */
+/** Names of required settings that are empty (or secrets that are too short), so the UI can show a setup checklist. */
 export function missingEnv(): string[] {
-  return REQUIRED.filter((name) => !process.env[name]);
+  return REQUIRED.filter((name) => !process.env[name] || tooShort(name));
 }
 
 /** Same as missingEnv, plus the settings only the website needs (not the Render worker). */

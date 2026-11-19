@@ -177,7 +177,7 @@ export default function HostingGuide() {
             <tr><td><code>WEBHOOK_VERIFY_TOKEN</code></td><td>Secret from step 3</td><td>✓</td><td>✓</td></tr>
             <tr><td><code>SESSION_SECRET</code></td><td>Secret from step 3</td><td>✓</td><td>✓</td></tr>
             <tr><td><code>TOKEN_ENCRYPTION_KEY</code></td><td>Secret from step 3. Must be identical on both, or the worker can&apos;t read saved logins.</td><td>✓</td><td>✓</td></tr>
-            <tr><td><code>ALLOWED_IG_USERNAMES</code></td><td>Your Instagram username, without @ (comma-separate several). Only these accounts can log in; anyone else is turned away before anything is saved.</td><td>✓</td><td></td></tr>
+            <tr><td><code>ALLOWED_IG_USERNAMES</code></td><td>Your Instagram username, without @ (comma-separate several). Only these accounts can log in; anyone else is turned away before anything is saved. Each name is tied to the first account that logs in with it: if you rename your account, add the new name and keep the old one listed, and whoever takes your old name can&apos;t get in.</td><td>✓</td><td></td></tr>
             <tr><td><code>APP_NAME</code></td><td>The name people see, e.g. your brand</td><td>✓</td><td></td></tr>
             <tr><td><code>OPERATOR_NAME</code></td><td>Your name or company, shown in the Privacy policy and Terms</td><td>✓</td><td></td></tr>
             <tr><td><code>CONTACT_EMAIL</code></td><td>Where people can reach you about their data</td><td>✓</td><td></td></tr>
@@ -246,7 +246,7 @@ export default function HostingGuide() {
           <tbody>
             <tr><td>&quot;Invalid redirect_uri&quot; on Instagram</td><td>The OAuth redirect URI in Meta must equal <code>APP_URL</code> + <code>/api/auth/instagram/callback</code> exactly.</td></tr>
             <tr><td>&quot;Invalid platform app&quot;</td><td>You used the Facebook App ID. Use the Instagram app ID (step 2).</td></tr>
-            <tr><td>&quot;@name can&apos;t use this copy&quot; after logging in</td><td>Add that username to <code>ALLOWED_IG_USERNAMES</code> on Vercel and redeploy.</td></tr>
+            <tr><td>&quot;@name can&apos;t use this copy&quot; after logging in</td><td>Add that username to <code>ALLOWED_IG_USERNAMES</code> on Vercel and redeploy. If the name is already listed, another Instagram account logged in with it first.</td></tr>
             <tr><td>Home page says &quot;Almost there&quot;</td><td>A required setting is empty in Vercel. Add it and redeploy.</td></tr>
             <tr><td>Home page says the database is a local file</td><td><code>DATABASE_URL</code> on Vercel still points to SQLite. Use the Render URL.</td></tr>
             <tr><td>Vercel build fails at Prisma</td><td>Check <code>DATABASE_URL</code> starts with <code>postgresql://</code> and that the Render worker deployed first (it creates the tables).</td></tr>

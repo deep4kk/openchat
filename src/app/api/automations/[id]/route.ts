@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { db } from "@/lib/db";
 import { forbidden, getAccount, isSameOrigin } from "@/lib/session";
 import { automationInput, toRow } from "@/lib/automation-schema";
@@ -16,7 +17,7 @@ export async function PUT(req: Request, { params }: Ctx) {
   if (!account) return notFound();
 
   const parsed = automationInput.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return NextResponse.json({ error: z.flattenError(parsed.error) }, { status: 400 });
 
   const { id } = await params;
   const { count } = await db.automation.updateMany({ where: { id, accountId: account.id }, data: toRow(parsed.data) });

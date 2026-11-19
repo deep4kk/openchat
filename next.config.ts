@@ -2,19 +2,9 @@ import type { NextConfig } from "next";
 
 const isProd = process.env.NODE_ENV === "production";
 
-// Next.js needs inline scripts/styles for hydration, so 'unsafe-inline' stays; everything else is locked to this origin.
-// Images come from Instagram's CDN (many changing hostnames), so any https image is allowed.
-const csp = [
-  "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: https:",
-  "font-src 'self' data:",
-  "connect-src 'self'",
-  "object-src 'none'",
-  "base-uri 'self'",
-  "frame-ancestors 'none'",
-].join("; ");
+// Pages get a per-request nonce CSP from src/middleware.ts. API routes return JSON or redirects,
+// never pages, so they get a policy that allows nothing at all.
+const apiCsp = "default-src 'none'; frame-ancestors 'none'";
 
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -22,8 +12,8 @@ const securityHeaders = [
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()" },
   { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
-  // The dev server needs eval and a websocket for hot reload, so the CSP is production-only.
-  ...(isProd ? [{ key: "Content-Security-Policy", value: csp }] : []),
+  // Browsers ignore this header on plain http, so it only takes effect where the app is served over https.
+  ...(isProd ? [{ key: "Strict-Transport-Security", value: "max-age=31536000" }] : []),
 ];
 
 const nextConfig: NextConfig = {
@@ -33,7 +23,10 @@ const nextConfig: NextConfig = {
     return [
       { source: "/:path*", headers: securityHeaders },
       // Nothing behind the login or under /api should ever be stored by a shared cache.
-      { source: "/api/:path*", headers: [{ key: "Cache-Control", value: "no-store" }] },
+      {
+        source: "/api/:path*",
+        headers: [{ key: "Cache-Control", value: "no-store" }, ...(isProd ? [{ key: "Content-Security-Policy", value: apiCsp }] : [])],
+      },
     ];
   },
 };

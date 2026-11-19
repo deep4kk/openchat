@@ -1,12 +1,15 @@
 import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { env, isAllowedUsername } from "@/lib/env";
+import { env } from "@/lib/env";
+import { claimUsername, mayLogIn } from "@/lib/allowlist";
 import { encrypt } from "@/lib/crypto";
 import { exchangeCode, getMe, GraphError, subscribeWebhooks } from "@/lib/instagram";
 import { createSession, LOGIN_ERROR_COOKIE } from "@/lib/session";
+import { allow, tooMany } from "@/lib/rate-limit";
 
 export async function GET(req: NextRequest) {
+  if (!allow(req, "login-callback", 30, 10 * 60_000)) return tooMany();
   const { searchParams } = req.nextUrl;
   const jar = await cookies();
   // The reason travels in a short-lived cookie, not the URL: a link to /?error=<text> must not
@@ -35,7 +38,7 @@ export async function GET(req: NextRequest) {
     const { accessToken, expiresAt } = await exchangeCode(code.replace(/#_$/, ""));
     const me = await getMe(accessToken);
     // Checked before anything is saved: other accounts leave no data behind.
-    if (!isAllowedUsername(me.username)) {
+    if (!(await mayLogIn(me.user_id, me.username))) {
       return fail(`@${me.username} can't use this copy. It's a personal setup; to use it for your account, run your own copy (see "Run your own copy" below).`);
     }
     await subscribeWebhooks(accessToken);
@@ -54,7 +57,8 @@ export async function GET(req: NextRequest) {
       create: { igUserId: me.user_id, ...data },
       update: data,
     });
-    await createSession(account.id);
+    await claimUsername(account.id, me.username);
+    await createSession(account);
     return NextResponse.redirect(`${env.appUrl}/dashboard`);
   } catch (err) {
     console.error("[autodm] instagram login failed", err);

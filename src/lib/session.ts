@@ -3,18 +3,21 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { NextResponse } from "next/server";
 import { db } from "./db";
-import { env, isAllowedUsername } from "./env";
+import { env } from "./env";
 import { signToken, verifyToken } from "./crypto";
+import { allowedClaimsInclude, isAllowedAccount } from "./allowlist";
 
 const COOKIE = "autodm_session";
 const MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 /** Why the last login attempt failed; set by the OAuth callback, shown once on the home page. */
 export const LOGIN_ERROR_COOKIE = "autodm_login_error";
 
-type Session = { accountId: string; exp: number };
+/** `v` is the account's sessionVersion when the cookie was issued; bumping it ends the session. */
+type Session = { accountId: string; v: number; exp: number };
 
-export async function createSession(accountId: string) {
-  const token = signToken({ accountId, exp: Date.now() + MAX_AGE_SECONDS * 1000 }, env.sessionSecret);
+export async function createSession(account: { id: string; sessionVersion: number }) {
+  const session: Session = { accountId: account.id, v: account.sessionVersion, exp: Date.now() + MAX_AGE_SECONDS * 1000 };
+  const token = signToken(session, env.sessionSecret);
   (await cookies()).set(COOKIE, token, {
     httpOnly: true,
     // Secure cookies are dropped on plain http, so follow the app's actual URL.
@@ -29,24 +32,43 @@ export async function destroySession() {
   (await cookies()).delete(COOKIE);
 }
 
+async function readSession(): Promise<Session | null> {
+  const session = verifyToken<Session>((await cookies()).get(COOKIE)?.value, env.sessionSecret);
+  // A signed token without these was never issued by createSession (or predates session versions).
+  return session && typeof session.accountId === "string" && typeof session.v === "number" && typeof session.exp === "number"
+    ? session
+    : null;
+}
+
+/**
+ * Ends this account's sessions everywhere, not only in this browser: a cookie copied elsewhere
+ * stops working too. Only counts if the cookie is still current, so an old one can't log others out.
+ */
+export async function endAllSessions() {
+  const session = await readSession();
+  if (session) {
+    await db.account.updateMany({ where: { id: session.accountId, sessionVersion: session.v }, data: { sessionVersion: { increment: 1 } } });
+  }
+  await destroySession();
+}
+
 /**
  * Account ID from the signed cookie, without touching the database. Not proof of access on its
  * own (the account may be gone or no longer allowed): pair it with getAccount(). Pages use it to
  * start their own queries in parallel with the account lookup instead of waiting for it.
  */
 export async function sessionAccountId(): Promise<string | null> {
-  const session = verifyToken<Session>((await cookies()).get(COOKIE)?.value, env.sessionSecret);
-  // A signed token without an expiry was never issued by createSession.
-  return session && typeof session.accountId === "string" && typeof session.exp === "number" ? session.accountId : null;
+  return (await readSession())?.accountId ?? null;
 }
 
 /** Returns the logged-in account, or null. Looked up once per request, however often it's called. */
 export const getAccount = cache(async () => {
-  const accountId = await sessionAccountId();
-  if (!accountId) return null;
-  const account = await db.account.findUnique({ where: { id: accountId } });
-  // Removing a username from ALLOWED_IG_USERNAMES also ends its existing sessions.
-  return account && isAllowedUsername(account.username) ? account : null;
+  const session = await readSession();
+  if (!session) return null;
+  const account = await db.account.findUnique({ where: { id: session.accountId }, include: allowedClaimsInclude() });
+  // Logging out (anywhere) or taking the account off ALLOWED_IG_USERNAMES ends existing sessions.
+  if (!account || account.sessionVersion !== session.v || !(await isAllowedAccount(account))) return null;
+  return account;
 });
 
 export async function requireAccount() {

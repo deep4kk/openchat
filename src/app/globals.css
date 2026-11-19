@@ -153,6 +153,17 @@ th, td { padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-ali
 tbody tr { transition: background-color .12s; }
 tbody tr:hover { background: color-mix(in srgb, var(--surface-2) 60%, transparent); }
 
+/* sortable headers */
+th:has(> .sort) { padding: 0; }
+.sort {
+  display: inline-flex; align-items: center; gap: 4px; width: 100%; padding: 10px 8px; border: none; background: none;
+  font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer; white-space: nowrap; transition: color .15s;
+}
+.sort:hover, .sort[data-active=true] { color: var(--text); }
+.sort-arrow { font-size: 11px; opacity: .45; }
+.sort[data-active=true] .sort-arrow { opacity: 1; color: var(--accent); }
+.nowrap { white-space: nowrap; }
+
 /* pager */
 .pager { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 select.select-sm { width: auto; padding: 4px 8px; font-size: 13px; border-radius: 8px; }

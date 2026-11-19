@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { ActiveToggle } from "./ActiveToggle";
 import { ActivityFeed, type FeedRun } from "./ActivityFeed";
+import { LocalTime } from "./LocalTime";
 import { Pager } from "./Pager";
 import { usePageSize } from "./usePageSize";
 
@@ -20,7 +21,44 @@ export type AutomationRow = {
   delivered: number;
   clicks: number;
   followers: number;
+  /** ISO timestamp */
+  createdAt: string;
 };
+
+type SortKey = "createdAt" | "runs" | "dmsSent" | "taps" | "delivered" | "clicks" | "followers";
+type Sort = { key: SortKey; dir: "asc" | "desc" };
+
+/** The sortable columns, in table order. */
+const SORTABLE: { key: SortKey; label: string }[] = [
+  { key: "createdAt", label: "Created" },
+  { key: "runs", label: "Runs" },
+  { key: "dmsSent", label: "DMs sent" },
+  { key: "taps", label: "Taps" },
+  { key: "delivered", label: "Delivered" },
+  { key: "clicks", label: "Clicks" },
+  { key: "followers", label: "New followers" },
+];
+
+/** Header that sorts by its column: first click puts the highest (or newest) on top, the next flips it. */
+function SortHeader({ col, sort, onSort }: { col: (typeof SORTABLE)[number]; sort: Sort; onSort: (s: Sort) => void }) {
+  const active = sort.key === col.key;
+  return (
+    <th aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}>
+      <button
+        type="button"
+        className="sort"
+        data-active={active}
+        onClick={() => onSort({ key: col.key, dir: active && sort.dir === "desc" ? "asc" : "desc" })}
+        title={`Sort by ${col.label.toLowerCase()}`}
+      >
+        {col.label}
+        <span className="sort-arrow" aria-hidden>
+          {active ? (sort.dir === "desc" ? "↓" : "↑") : "↕"}
+        </span>
+      </button>
+    </th>
+  );
+}
 
 export type Tab = "automations" | "activity";
 
@@ -38,6 +76,7 @@ export function DashboardTabs({
   const [tab, setTab] = useState<Tab>(initialTab);
   const [page, setPage] = useState(0);
   const [size, setSize] = usePageSize("automations", 10);
+  const [sort, setSort] = useState<Sort>({ key: "createdAt", dir: "desc" });
 
   function select(next: Tab) {
     setTab(next);
@@ -47,9 +86,22 @@ export function DashboardTabs({
     window.history.replaceState(null, "", url);
   }
 
-  const lastPage = Math.max(0, Math.ceil(automations.length / size) - 1);
+  const sorted = useMemo(() => {
+    const sign = sort.dir === "asc" ? 1 : -1;
+    // Ties keep the newest first, so equal numbers don't shuffle between clicks.
+    return [...automations].sort((a, b) => {
+      const by = sort.key === "createdAt" ? a.createdAt.localeCompare(b.createdAt) : a[sort.key] - b[sort.key];
+      return by * sign || b.createdAt.localeCompare(a.createdAt);
+    });
+  }, [automations, sort]);
+
+  const lastPage = Math.max(0, Math.ceil(sorted.length / size) - 1);
   const current = Math.min(page, lastPage);
-  const slice = automations.slice(current * size, (current + 1) * size);
+  const slice = sorted.slice(current * size, (current + 1) * size);
+  const onSort = (next: Sort) => {
+    setSort(next);
+    setPage(0);
+  };
 
   return (
     <section className="card stack" style={{ marginBottom: 20 }}>
@@ -89,15 +141,12 @@ export function DashboardTabs({
                       <th>Where</th>
                       <th>Trigger</th>
                       <th>Follow gate</th>
-                      <th>Runs</th>
-                      <th>DMs sent</th>
-                      <th>Taps</th>
-                      <th>Delivered</th>
-                      <th>Clicks</th>
-                      <th>New followers</th>
+                      {SORTABLE.map((col) => (
+                        <SortHeader key={col.key} col={col} sort={sort} onSort={onSort} />
+                      ))}
                     </tr>
                   </thead>
-                  <tbody key={`${current}-${size}`} className="fade-in">
+                  <tbody key={`${current}-${size}-${sort.key}-${sort.dir}`} className="fade-in">
                     {slice.map((a) => (
                       <tr key={a.id}>
                         <td>
@@ -111,6 +160,9 @@ export function DashboardTabs({
                         <td className="small">{a.where}</td>
                         <td className="small">{a.trigger}</td>
                         <td className="small">{a.followGate ? "On" : "Off"}</td>
+                        <td className="small muted nowrap">
+                          <LocalTime iso={a.createdAt} mode="date" />
+                        </td>
                         <td>{a.runs}</td>
                         <td>{a.dmsSent}</td>
                         <td>{a.taps}</td>

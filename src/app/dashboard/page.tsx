@@ -64,6 +64,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
     delivered: tally(a.id, "DELIVERED"),
     clicks: sum(clicked, a.id),
     followers: sum(followers, a.id),
+    createdAt: a.createdAt.toISOString(),
   }));
   const feed: FeedRun[] = recent.map((r) => ({
     id: r.id,

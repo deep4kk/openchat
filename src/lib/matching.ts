@@ -54,12 +54,13 @@ export function pickRandom<T>(items: T[]): T | undefined {
   return items.length ? items[Math.floor(Math.random() * items.length)] : undefined;
 }
 
-/** Quick-reply / postback payloads carry the run ID so taps map back to a run. */
+/** Quick-reply / postback payloads carry the run ID (and its signature, see links.ts) so taps map back to a run. */
 export const payload = {
-  gate: (runId: string) => `GATE:${runId}`,
-  recheck: (runId: string) => `RECHECK:${runId}`,
-  parse(value: string | undefined): { kind: "GATE" | "RECHECK"; runId: string } | null {
-    const m = value?.match(/^(GATE|RECHECK):(.+)$/);
-    return m ? { kind: m[1] as "GATE" | "RECHECK", runId: m[2] } : null;
+  gate: (runId: string, sig?: string) => `GATE:${runId}${sig ? `.${sig}` : ""}`,
+  recheck: (runId: string, sig?: string) => `RECHECK:${runId}${sig ? `.${sig}` : ""}`,
+  parse(value: string | undefined): { kind: "GATE" | "RECHECK"; runId: string; sig?: string } | null {
+    const m = value?.match(/^(GATE|RECHECK):([^.]+)(?:\.([0-9a-f]+))?$/);
+    if (!m) return null;
+    return { kind: m[1] as "GATE" | "RECHECK", runId: m[2], ...(m[3] ? { sig: m[3] } : {}) };
   },
 };

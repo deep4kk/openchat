@@ -118,7 +118,7 @@ export function ActivityFeed({ runs, capped }: { runs: FeedRun[]; capped: boolea
                           on <a href={`/automations/${r.automationId}`}>{r.automationName}</a>
                         </span>
                         <span className="muted small feed-time">
-                          <LocalTime iso={r.createdAt} timeOnly />
+                          <LocalTime iso={r.createdAt} mode="time" />
                         </span>
                       </div>
                       <div className="feed-comment">{r.commentText}</div>

@@ -63,7 +63,8 @@ function SetupChecklist({ missing }: { missing: string[] }) {
       </div>
       <h1>Almost there</h1>
       <p className="muted">
-        These settings are empty. Locally, fill them in <code>.env</code> (see <code>docs/SETUP.md</code>) and restart. On
+        These settings are empty, or too short for <code>SESSION_SECRET</code> and <code>TOKEN_ENCRYPTION_KEY</code> (32+
+        characters; <code>openssl rand -hex 32</code> makes one). Locally, fill them in <code>.env</code> (see <code>docs/SETUP.md</code>) and restart. On
         Vercel or Render, add them as environment variables and redeploy (see <a href="/docs">Run your own copy</a>).{" "}
         <code>ALLOWED_IG_USERNAMES</code> is your Instagram username: only the accounts listed there can log in.
       </p>

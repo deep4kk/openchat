@@ -40,4 +40,5 @@ test("payload round-trips", () => {
   assert.deepEqual(payload.parse(payload.gate("abc")), { kind: "GATE", runId: "abc" });
   assert.deepEqual(payload.parse(payload.recheck("abc")), { kind: "RECHECK", runId: "abc" });
   assert.equal(payload.parse("hello"), null);
+  assert.deepEqual(payload.parse(payload.gate("abc", "0f1e")), { kind: "GATE", runId: "abc", sig: "0f1e" });
 });
